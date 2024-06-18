@@ -52,6 +52,14 @@ def calculate_margin_circle(s, c_r, negativeInside=True):
   else:
     return -margin
 
+def calculate_margin_circle_param(s, c_r, negativeInside=True):
+  x_center, radius = c_r
+  dist_to_center = np.linalg.norm(s[:2] - np.array([x_center, s[-1]]))
+  margin = dist_to_center - radius
+  if negativeInside:
+    return margin
+  else:
+    return -margin
 
 # == Plotting ==
 def plot_arc(

@@ -1,17 +1,3 @@
-"""
-Please contact the author(s) of this library if you have any questions.
-Authors: Kai-Chieh Hsu ( kaichieh@princeton.edu )
-
-This experiment runs double deep Q-network with the discounted reach-avoid
-Bellman equation (DRABE) proposed in [RSS21] on a 3-dimensional Dubins car
-problem. We use this script to generate Fig. 5 in the paper.
-
-Examples:
-    RA: python3 sim_car_one.py -sf -of scratch -w -wi 5000 -g 0.9999 -n 9999
-    test: python3 sim_car_one.py -sf -of scratch -w -wi 50 -mu 1000 -cp 400
-        -n tmp
-"""
-
 import os
 import argparse
 import time
@@ -48,15 +34,9 @@ parser.add_argument(
 
 # car dynamics
 parser.add_argument(
-    "-cr", "--consRadius", help="constraint radius", default=1., type=float
-)
-parser.add_argument(
     "-tr", "--targetRadius", help="target radius", default=.5, type=float
 )
-parser.add_argument(
-    "-turn", "--turnRadius", help="turning radius", default=.6, type=float
-)
-parser.add_argument("-s", "--speed", help="speed", default=.5, type=float)
+parser.add_argument("-s", "--speed", help="speed", default=1, type=float)
 
 # training scheme
 parser.add_argument(
@@ -84,7 +64,7 @@ parser.add_argument(
     "-a", "--annealing", help="gamma annealing", action="store_true"
 )
 parser.add_argument(
-    "-arc", "--architecture", help="NN architecture", default=[100, 100],
+    "-arc", "--architecture", help="NN architecture", default=[512, 512, 512],
     nargs="*", type=int
 )
 parser.add_argument(
@@ -122,7 +102,7 @@ args = parser.parse_args()
 print(args)
 
 # == CONFIGURATION ==
-env_name = "dubins_car-v1"
+env_name = "dubins_car_param-v0"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 maxUpdates = args.maxUpdates
 updateTimes = args.updateTimes
@@ -134,7 +114,7 @@ fn = args.name + '-' + args.doneType
 if args.showTime:
   fn = fn + '-' + timestr
 
-outFolder = os.path.join(args.outFolder, 'car-DDQN', fn)
+outFolder = os.path.join(args.outFolder, 'car_param-DDQN', fn)
 print(outFolder)
 figureFolder = os.path.join(outFolder, 'figure')
 os.makedirs(figureFolder, exist_ok=True)
@@ -162,27 +142,18 @@ print(
 
 # == Setting in this Environment ==
 env.set_speed(speed=args.speed)
-env.set_target(radius=args.targetRadius)
-env.set_constraint(radius=args.consRadius)
-env.set_radius_rotation(R_turn=args.turnRadius)
+env.set_target(center=np.array([3,0]), radius=args.targetRadius)
 print("Dynamic parameters:")
 print("  CAR", end='\n    ')
 print(
-    "Target: {:.1f} ".format(env.car.target_radius)
-    + "Max speed: {:.2f} ".format(env.car.speed)
+    "Target: {:.1f} ".format(env.target_radius)
+    + "Max speed: {:.2f} ".format(env.speed)
 )
 print("  ENV", end='\n    ')
 print(
-    "Constraint: {:.1f} ".format(env.constraint_radius)
-    + "Target: {:.1f} ".format(env.target_radius)
-    + "Turn: {:.2f} ".format(env.R_turn)
+    "Target: {:.1f} ".format(env.target_radius)
     + "Max speed: {:.2f} ".format(env.speed)
 )
-print(env.car.discrete_controls)
-if 2 * env.R_turn - env.constraint_radius > env.target_radius:
-  print("Type II Reach-Avoid Set")
-else:
-  print("Type I Reach-Avoid Set")
 env.set_seed(args.randomSeed)
 
 # == Get and Plot max{l_x, g_x} ==
@@ -241,7 +212,7 @@ if args.plotFigure or args.storeFigure:
       v.T, interpolation='none', extent=axStyle[0], origin="lower",
       cmap="seismic", vmin=vmin, vmax=vmax, zorder=-1
   )
-  env.plot_reach_avoid_set(ax)
+  #env.plot_reach_avoid_set(ax)
   cbar = fig.colorbar(
       im, ax=ax, pad=0.01, fraction=0.05, shrink=.95, ticks=[vmin, 0, vmax]
   )
@@ -260,7 +231,6 @@ if args.plotFigure or args.storeFigure:
     plt.show()
     plt.pause(0.001)
   plt.close()
-
 # == Agent CONFIG ==
 print("\n== Agent Information ==")
 if args.annealing:
@@ -417,7 +387,7 @@ if args.plotFigure or args.storeFigure:
   )
   env.plot_trajectories(
       agent.Q_network, states=env.visual_initial_states, toEnd=False, ax=ax,
-      c='w', lw=1.5, T=100, orientation=-np.pi / 2
+      c='w', lw=1.5, T=250, orientation=0
   )
   ax.set_xlabel('Rollout RA', fontsize=24)
 

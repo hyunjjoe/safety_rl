@@ -26,6 +26,16 @@ register(
 )
 
 register(
+    id="dubins_car_param-v0",
+    entry_point="gym_reachability.gym_reachability.envs:DubinsCarParamEnv"
+)
+
+register(
+    id="grasp-v0",
+    entry_point="gym_reachability.gym_reachability.envs:GraspEnv"
+)
+
+register(
     id="dubins_car_pe-v0",
     entry_point="gym_reachability.gym_reachability.envs:DubinsCarPEEnv"
 )
@@ -38,4 +48,9 @@ register(
 register(
     id="zermelo_show-v0",
     entry_point="gym_reachability.gym_reachability.envs:ZermeloShowEnv"
+)
+
+register(
+    id="dubins_car_param2-v0",
+    entry_point="gym_reachability.gym_reachability.envs:DubinsCarParam2Env"
 )
