@@ -31,8 +31,8 @@ register(
 )
 
 register(
-    id="grasp-v0",
-    entry_point="gym_reachability.gym_reachability.envs:GraspEnv"
+    id="grasp_nom-v0",
+    entry_point="gym_reachability.gym_reachability.envs:GraspNomEnv"
 )
 
 register(

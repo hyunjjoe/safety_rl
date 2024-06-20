@@ -29,6 +29,49 @@ def calculate_margin_rect(s, x_y_w_h, negativeInside=True):
   else:
     return -margin
 
+def calculate_signed_distance(eef_pos, object_pos, object_dims):
+    """Calculates the signed distance from the end effector to the object.
+
+    Args:
+        eef_pos (np.ndarray): The position of the end effector [x, y, z].
+        object_pos (np.ndarray): The position of the object center [x, y, z].
+        object_dims (tuple): The dimensions of the object (width, height, depth).
+
+    Returns:
+        float: The signed distance. Negative if the end effector is inside the object.
+    """
+    # Calculate the Euclidean distance
+    distance = np.linalg.norm(eef_pos - object_pos)
+
+    # Check if the end effector is inside the object
+    inside = np.all(np.abs(eef_pos - object_pos) <= np.array(object_dims) / 2)
+
+    # Return the signed distance
+    return -distance if inside else distance
+
+def calculate_margin_cube(s, center_xyz_whd, negativeInside=True):
+    """Calculates the margin to a cubic box in the x-y-z state space.
+
+    Args:
+        s (np.ndarray): the state of the agent. It requires that s[0] is the
+            x position, s[1] is the y position, and s[2] is the z position.
+        center_xyz_whd (tuple of floats): (center_x, center_y, center_z, width, height, depth).
+        negativeInside (bool, optional): add a negative sign to the distance
+            if inside the box. Defaults to True.
+
+    Returns:
+        float: margin.
+    """
+    x, y, z, w, h, d = center_xyz_whd
+    delta_x = np.abs(s[0] - x)
+    delta_y = np.abs(s[1] - y)
+    delta_z = np.abs(s[2] - z)
+    margin = max(delta_x - w / 2, delta_y - h / 2, delta_z - d / 2)
+
+    if negativeInside:
+        return margin
+    else:
+        return -margin
 
 def calculate_margin_circle(s, c_r, negativeInside=True):
   """Calculates the margin to a circle in the x-y state space.

@@ -7,6 +7,11 @@ Authors: Kai-Chieh Hsu ( kaichieh@princeton.edu )
 from .multi_player_lunar_lander_reachability import (
     MultiPlayerLunarLanderReachability
 )
+from .dubins_car_param import DubinsCarParamEnv
+
+from .grasp_nom import GraspNomEnv
+
+from .dubins_car_param2 import DubinsCarParam2Env
 
 from .one_player_reach_avoid_lunar_lander import OnePlayerReachAvoidLunarLander
 
