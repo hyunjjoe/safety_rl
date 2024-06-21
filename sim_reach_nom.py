@@ -47,7 +47,7 @@ parser.add_argument(
 )
 parser.add_argument(
       "-cf", "--config_file", help="config file path", type=str,
-      default=os.path.join("config", "grasp.yaml")
+      default=os.path.join("config", "reach.yaml")
 )
 
 
@@ -101,7 +101,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "-arc", "--architecture", help="neural network architecture",
-    default=[512, 512, 512], nargs="*", type=int
+    default=[1024, 1024, 1024], nargs="*", type=int
 )
 #Tanh?
 parser.add_argument(
@@ -122,7 +122,7 @@ parser.add_argument(
 parser.add_argument("-n", "--name", help="extra name", default='', type=str)
 parser.add_argument(
     "-of", "--outFolder", help="output file",
-    default='experiments/Grasp_nom' + timestr, type=str
+    default='experiments/Reach_nom' + timestr, type=str
 )
 parser.add_argument(
     "-pf", "--plotFigure", help="plot figures", action="store_true"
@@ -135,14 +135,13 @@ parser.add_argument(
 args = parser.parse_args()
 
 # == CONFIGURATION ==
-env_name = "grasp_nom-v0"
+env_name = "reach_nom-v0"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 fn = args.name + '-' + args.doneType
 if args.showTime:
   fn = fn + '-' + timestr
 
-outFolder = os.path.join(args.outFolder, 'GraspNom-DDQN', fn)
+outFolder = os.path.join(args.outFolder, 'ReachNom-DDQN', fn)
 print(outFolder)
 
 CONFIG = dqnConfig(
@@ -217,7 +216,7 @@ def run_experiment(args, CONFIG, env):
       env,
       MAX_UPDATES=CONFIG.MAX_UPDATES,
       MAX_EP_STEPS=CONFIG.MAX_EP_STEPS,
-      warmupBuffer=True,
+      warmupBuffer=False,
       warmupQ=args.warmup,
       warmupIter=args.warmupIter,
       addBias=args.addBias,

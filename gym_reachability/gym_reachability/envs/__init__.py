@@ -9,7 +9,7 @@ from .multi_player_lunar_lander_reachability import (
 )
 from .dubins_car_param import DubinsCarParamEnv
 
-from .grasp_nom import GraspNomEnv
+from .reach_nom import ReachNomEnv
 
 from .dubins_car_param2 import DubinsCarParam2Env
 

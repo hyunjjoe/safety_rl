@@ -8,17 +8,17 @@ import random
 import robosuite as suite
 from robosuite.wrappers import GymWrapper
 from omegaconf import OmegaConf
-from robosuite.environments.manipulation.grasp import Grasp
+from robosuite.environments.manipulation.reach import Reach
 from copy import deepcopy
 from .env_utils import calculate_margin_cube, calculate_signed_distance
 
-class GraspNomEnv(gym.Env):
-  """Wrapper class for the Grasp env in Robosuite
+class ReachNomEnv(gym.Env):
+  """Wrapper class for the Reach env in Robosuite
   """
 
   def __init__(
       self, device, cfg_env, mode="RA", doneType="toEnd", sample_inside_obs=True,
-      sample_inside_tar=True, render=False, vis_callback=None
+      sample_inside_tar=True, render=True, vis_callback=None
   ):
     """Initializes the environment with given arguments.
 
@@ -34,8 +34,8 @@ class GraspNomEnv(gym.Env):
     """
     self.seed_val = cfg_env.seed
     env_id = cfg_env.env_id
-    if env_id != "Grasp":
-      raise NotImplementedError("Only Grasp environment is supported")
+    if env_id != "Reach":
+      raise NotImplementedError("Only Reach environment is supported")
     keys = cfg_env.obs_keys
     self.keys = keys
     self.horizon = cfg_env.robosuite.horizon
@@ -50,12 +50,13 @@ class GraspNomEnv(gym.Env):
     self.suite_env = env
     self.state, _ = self.suite_env.reset()
     self.timeout = self.suite_env.env.horizon
-    
+    self.viewer = None  # Initialize viewer attribute
+
     #State Space to train VF on (16 dimensions)
     self.bounds = np.array([
         [-0.4, 0.4], #ee x pos (Table bounds (x))
         [-0.4, 0.4], #ee y pos (Table bounds (y))
-        [0.81, 1.2], #ee z pos (Table bounds (z))
+        [0.81, 1.5], #ee z pos (Table bounds (z))
         [-1, 1], #quat x
         [-1, 1], #quat y
         [-1, 1], #quat z
@@ -120,6 +121,10 @@ class GraspNomEnv(gym.Env):
     for dim, bound in enumerate(self.bounds):
       flagLow = state[dim] < bound[0]
       flagHigh = state[dim] > bound[1]
+      #if flagLow:
+        #print(f"Dimension {dim} out of bounds: {state[dim]} < {bound[0]}")
+      #if flagHigh:
+        #print(f"Dimension {dim} out of bounds: {state[dim]} > {bound[1]}")
       if flagLow or flagHigh:
         return False
     return True
@@ -150,7 +155,10 @@ class GraspNomEnv(gym.Env):
         return self.state
     
   def render_sim(self):
-        self.suite_env.render(camera_name="frontview")
+    if self.viewer is None:
+      self.viewer = self.suite_env.render()
+    else:
+      self.viewer.render()
 
   def reset(self):
         obs = self._reset_suite()
@@ -181,6 +189,17 @@ class GraspNomEnv(gym.Env):
         bool: True if the episode is terminated for any lander.
         dict: dictionary with safety and target margins.
     """
+    # play action
+    # Decode the action index into discrete controls
+
+    #Unshaped action indicies vs. shaped action indicies (when simulating trajectories)
+    if isinstance(act, int):
+       act = np.unravel_index(act, self.numActionList)
+    else:
+      act = self.discrete_controls[np.arange(7), act]
+    next_obs, _, _, _, _ = self.suite_env.step(act)
+    self.state = next_obs
+    
     #Target Margin
     l_x = self.target_margin(self.state)
     #Safety Margin (boundary check)
@@ -188,13 +207,6 @@ class GraspNomEnv(gym.Env):
     fail = g_x > 0
     success = l_x <= 0
 
-    # play action
-    # Decode the action index into discrete controls
-    act_indices = np.unravel_index(act, self.numActionList)
-    act = self.discrete_controls[np.arange(7), act_indices]
-    next_obs, reward, done, _, info = self.suite_env.step(act)
-    self.state = next_obs
-    
     # cost
     if self.mode == "RA":
       if fail:
@@ -211,21 +223,20 @@ class GraspNomEnv(gym.Env):
     # = `info`
     if done and self.doneType == "fail":
       info = {"g_x": self.penalty * self.scaling}
-
+    else:
+      info = {"g_x": g_x, "l_x": l_x}
     return self.state, cost, done, info
 
-  def simulate_one_trajectory(self, q_func, init_q=False):
-    obs = self.suite_env.reset()
-    state_dict = self.suite_env.get_state()
-    obs = self.suite_env.reset_to(state_dict)
+  def simulate_one_trajectory(self, q_func, T=400, init_q=False, toEnd=False):
+    obs = self._reset_suite()
     result = 0
-    traj = dict(actions=[], dones=[], states=[], initial_state_dict=state_dict)
+    states = []
     initial_q = None
-
-    for _ in range(self.timeout):
-        # get obs state in np
-        state_np = self.convert_obs_to_np(obs)
-        state_tensor = torch.FloatTensor(state_np)
+    states.append(self.state)
+    #if self.render:
+    #  self.render_sim()
+    for _ in range(T):
+        state_tensor = torch.FloatTensor(obs)
         state_tensor = state_tensor.to(self.device).unsqueeze(0)
         with torch.no_grad():
             state_action_values = q_func(state_tensor)
@@ -233,56 +244,40 @@ class GraspNomEnv(gym.Env):
             initial_q = q_func(state_tensor).min(dim=1)[0].item()
         #action 
         Q_mtx = state_action_values.view(3, 3, 3, 3, 3, 3, 3)
+        min_index = Q_mtx.argmin()
+        min_indices2 = torch.unravel_index(min_index, Q_mtx.shape)
+        act = torch.tensor(min_indices2).cpu().numpy()
         # Reduce dimensions to find the argmax values
         # Iterate through the dimensions to find the maximum values and indices
-        min_values, min_indices = Q_mtx.min(dim=-1)
-        for dim in range(len(self.numActionList) - 2, -1, -1):
-            min_values, min_indices = min_values.min(dim=dim)
-            min_indices = min_indices.view(-1)
-        act = min_indices
         # play action
         next_obs, _, done, _ = self.step(act)
         l_x = self.target_margin(self.state)
         g_x = self.safety_margin(self.state)
         # visualization
-        if self.render:
-            self.suite_env.render(mode="human", camera_name="frontview")
         # collect transition
-        traj["actions"].append(act)
-        traj["dones"].append(done)
-        traj["states"].append(state_dict["states"])
         # break if done or if success
-        if done or l_x <= 0:
+        if l_x <= 0:
             result = 1 #Success
             break
-        if g_x > 0:
+        if done or g_x > 0:
             result = -1 #Failed
         # update for next iter
         obs = deepcopy(next_obs)
-        state_dict = self.suite_env.get_state()
-    if result == 0:
-       result = -1
+    #if result == 0:
+    #   result = -1
     # list to numpy array
-    for k in traj:
-        if k == "initial_state_dict":
-            continue
-        if isinstance(traj[k], dict):
-            for kp in traj[k]:
-                traj[k][kp] = np.array(traj[k][kp])
-        else:
-            traj[k] = np.array(traj[k])
     if init_q:
-      return traj, result, initial_q
-    return traj, result
+      return states, result, initial_q
+    return states, result
 
-  def simulate_trajectories(self, q_func, num_traj):
+  def simulate_trajectories(self, q_func, T=400, num_rnd_traj=None, toEnd=False):
     trajectories = []
-    results = np.empty(shape=(num_traj,), dtype=int)
-    for idx in range(num_traj):
-        traj, result = self.simulate_one_trajectory(q_func)
+    results = np.empty(shape=(num_rnd_traj,), dtype=int)
+    for idx in range(num_rnd_traj):
+        traj, result = self.simulate_one_trajectory(q_func=q_func, T=T)
         trajectories.append((traj))
         results[idx] = result
-    return trajectories
+    return trajectories, results
   
   def get_warmup_examples(self, num_warmup_samples=100, s_margin=False):
     """Gets warmup samples to initialize the Q-network.
@@ -309,12 +304,12 @@ class GraspNomEnv(gym.Env):
       if s_margin:
         g_x = self.safety_margin(s)
         heuristic_v[i, :] = g_x
-        states[i, :] = self.convert_obs_to_np(s)
+        states[i, :] = s
       else:
         l_x = self.target_margin(s)
         g_x = self.safety_margin(s)
         heuristic_v[i, :] = np.maximum(l_x, g_x)
-        states[i, :] = self.convert_obs_to_np(s)
+        states[i, :] = s
     return states, heuristic_v
 
   def confusion_matrix(self, q_func, num_states=50):
