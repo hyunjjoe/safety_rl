@@ -54,8 +54,8 @@ class ReachNomEnv(gym.Env):
 
     #State Space to train VF on (16 dimensions)
     self.bounds = np.array([
-        [-0.4, 0.4], #ee x pos (Table bounds (x))
-        [-0.4, 0.4], #ee y pos (Table bounds (y))
+        [-0.8, 0.8], #ee x pos (Table bounds (x))
+        [-0.8, 0.8], #ee y pos (Table bounds (y))
         [0.81, 1.5], #ee z pos (Table bounds (z))
         [-1, 1], #quat x
         [-1, 1], #quat y
@@ -77,16 +77,16 @@ class ReachNomEnv(gym.Env):
     self.interval = self.high - self.low
     self.obs_dim = 16
     self.object_dims = (0.02, 0.02, 0.02)
-    self.numActionList = [3,3,3,3,3,3,3]
-    self.action_space = gym.spaces.Discrete(3**7)
+    self.numActionList = [2,2,2,2,2,2,2] #1, 1, 1, 1, 1, 1, 1
+    self.action_space = gym.spaces.Discrete(2**7) #Would be 1 for policies (1^7)
     self.discrete_controls = np.array([
-    [-1, 0, 1],
-    [-1, 0, 1],
-    [-1, 0, 1],
-    [-1, 0, 1],
-    [-1, 0, 1],
-    [-1, 0, 1],
-    [-1, 0, 1]
+    [-1, 1],
+    [-1, 1],
+    [-1, 1],
+    [-1, 1],
+    [-1, 1],
+    [-1, 1],
+    [-1, 1]
         ])
     self.sample_inside_obs = sample_inside_obs
     self.sample_inside_tar = sample_inside_tar
@@ -121,10 +121,10 @@ class ReachNomEnv(gym.Env):
     for dim, bound in enumerate(self.bounds):
       flagLow = state[dim] < bound[0]
       flagHigh = state[dim] > bound[1]
-      #if flagLow:
-        #print(f"Dimension {dim} out of bounds: {state[dim]} < {bound[0]}")
-      #if flagHigh:
-        #print(f"Dimension {dim} out of bounds: {state[dim]} > {bound[1]}")
+      if flagLow:
+        print(f"Dimension {dim} out of bounds: {state[dim]} < {bound[0]}")
+      if flagHigh:
+        print(f"Dimension {dim} out of bounds: {state[dim]} > {bound[1]}")
       if flagLow or flagHigh:
         return False
     return True
@@ -142,7 +142,7 @@ class ReachNomEnv(gym.Env):
   def target_margin(self, s):
       #s = self.convert_obs_to_np(s)
       #Solely Cube and EE rel pos
-      target_margin = calculate_signed_distance(s[:3], s[10:13], self.object_dims)
+      target_margin = calculate_signed_distance(s[:3], s[9:12], self.object_dims)
       return target_margin
 
   def _reset_suite(self, state=None):
@@ -243,15 +243,14 @@ class ReachNomEnv(gym.Env):
         if initial_q is None:
             initial_q = q_func(state_tensor).min(dim=1)[0].item()
         #action 
-        Q_mtx = state_action_values.view(3, 3, 3, 3, 3, 3, 3)
-        min_index = Q_mtx.argmin()
-        min_indices2 = torch.unravel_index(min_index, Q_mtx.shape)
-        act = torch.tensor(min_indices2).cpu().numpy()
+        min_index = state_action_values.argmin()
+        act = min_index.item()
         # Reduce dimensions to find the argmax values
         # Iterate through the dimensions to find the maximum values and indices
         # play action
         next_obs, _, done, _ = self.step(act)
         l_x = self.target_margin(self.state)
+        print(l_x)
         g_x = self.safety_margin(self.state)
         # visualization
         # collect transition

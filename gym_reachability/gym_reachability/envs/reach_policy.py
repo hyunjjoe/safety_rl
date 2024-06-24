@@ -11,15 +11,15 @@ from omegaconf import OmegaConf
 from robosuite.environments.manipulation.grasp import Grasp
 from robomimic.utils.file_utils import policy_from_checkpoint, env_from_checkpoint
 from copy import deepcopy
-from .env_utils import calculate_margin_cube
+from .env_utils import calculate_margin_cube, calculate_signed_distance
 
-class GraspNomEnv(gym.Env):
+class ReachPolicyEnv(gym.Env):
   """Wrapper class for the Grasp env in Robosuite
   """
 
   def __init__(
       self, device, cfg_env, mode="RA", doneType="toEnd", sample_inside_obs=True,
-      sample_inside_tar=True, render=False, vis_callback=None
+      sample_inside_tar=True, render=True, vis_callback=None
   ):
     """Initializes the environment with given arguments.
 
@@ -35,8 +35,8 @@ class GraspNomEnv(gym.Env):
     """
     self.seed_val = cfg_env.seed
     env_id = cfg_env.env_id
-    if env_id != "Grasp":
-      raise NotImplementedError("Only Grasp environment is supported")
+    if env_id != "Reach":
+      raise NotImplementedError("Only Reach environment is supported")
     keys = cfg_env.obs_keys
     self.keys = keys
     horizon = cfg_env.robosuite.horizon
@@ -44,7 +44,6 @@ class GraspNomEnv(gym.Env):
     env = GymWrapper(suite.make(env_id, **config_suite), keys=keys)
     self.gym_env = env
     self.observation_space = self.gym_env.observation_space
-    self.action_space = self.gym_env.action_space
 
     checkpoint = f"{cfg_env.checkpoint_folder}/models/{cfg_env.checkpoint}"
     policy, ckpt_dict = policy_from_checkpoint(
@@ -84,6 +83,10 @@ class GraspNomEnv(gym.Env):
     self.interval = self.high - self.low
     self.sample_inside_obs = sample_inside_obs
     self.sample_inside_tar = sample_inside_tar
+    self.obs_dim = 16
+    self.object_dims = (0.02, 0.02, 0.02)
+    self.numActionList = [1,1,1,1,1,1,1]
+    self.action_space = gym.spaces.Discrete(1) #Would be 1 for policies (1^7)
 
     #Internal state
     self.mode = mode
@@ -115,6 +118,8 @@ class GraspNomEnv(gym.Env):
     Returns:
         bool: False if the agent is not in the environment.
     """
+    if isinstance(state, dict):
+      state = self.convert_obs_to_np(state)
     for dim, bound in enumerate(self.bounds):
       flagLow = state[dim] < bound[0]
       flagHigh = state[dim] > bound[1]
@@ -123,6 +128,8 @@ class GraspNomEnv(gym.Env):
     return True
   
   def safety_margin(self, s):
+      if isinstance(s, dict):
+        s = self.convert_obs_to_np(s)
       #Enclosure Safety Margin
       g_x_list = []
       boundary = np.append(self.midpoint[:3], self.interval[:3])
@@ -131,6 +138,13 @@ class GraspNomEnv(gym.Env):
       safety_margin = np.max(np.array(g_x_list))      
       return safety_margin
 
+  def target_margin(self, s):
+      if isinstance(s, dict):
+        s = self.convert_obs_to_np(s)
+      #Solely Cube and EE rel pos
+      target_margin = calculate_signed_distance(eef_pos=s[:3], object_pos=s[9:12], object_dims=self.object_dims)
+      return target_margin
+  
   def _reset_suite(self, state=None):
         if state is not None:
             state = state.item()
@@ -149,21 +163,21 @@ class GraspNomEnv(gym.Env):
         return obs
     
   def convert_obs_to_np(self, obs):
-        # loop through keys in proper order and create numpy observation
-        obs_np = np.zeros(self.observation_space.shape)
-        total_shape = 0
-        for key in sorted(self.keys):
-            if key == "object-state":
-                key = "object"
-            shape = obs[key].flatten().shape[0]
-            obs_val = obs[key].flatten()
-            if isinstance(obs_val, torch.Tensor):
-                obs_val = obs_val.detach().cpu().numpy()
-            obs_np[total_shape:total_shape+shape] = obs_val
-            total_shape += shape
-        return obs_np
+    # Initialize an empty NumPy array with the desired shape
+    obs_np = np.zeros(self.observation_space.shape)
+    total_shape = 0
+    for key in self.keys:
+        if key == "object-state":
+            key = "object"
+        obs_val = obs[key].flatten()
+        shape = obs_val.shape[0]
+        if isinstance(obs_val, torch.Tensor):
+            obs_val = obs_val.detach().cpu().numpy()
+        obs_np[total_shape:total_shape + shape] = obs_val
+        total_shape += shape
+    return obs_np
   
-  def step(self, act):
+  def step(self, act=0):
     """Evolves the environment one step forward for manipulator.
 
     Returns:
@@ -172,15 +186,18 @@ class GraspNomEnv(gym.Env):
         bool: True if the episode is terminated for any lander.
         dict: dictionary with safety and target margins.
     """
-    #Target Margin (call the success check)
-    success = self.suite_env.is_success()["task"]
+    # call policy
+    action = self.policy(ob=self.state)
+    # play action
+    #Next State, Reward, Done (Task Success), Info
+    next_obs, _, _, _ = self.suite_env.step(action)
+    self.state = next_obs
+
     #Safety Margin (boundary check)
+    l_x = self.target_margin(self.state)
     g_x = self.safety_margin(self.state)
     fail = g_x > 0
-
-    # play action
-    next_obs, _, done, _ = self.suite_env.step(act)
-    self.state = next_obs
+    success = l_x <= 0
     
     # cost
     if self.mode == "RA":
@@ -198,54 +215,117 @@ class GraspNomEnv(gym.Env):
     # = `info`
     if done and self.doneType == "fail":
       info = {"g_x": self.penalty * self.scaling}
-
+    else:
+      info = {"g_x": g_x, "l_x": l_x}
     return self.state, cost, done, info
 
-  def simulate_one_trajectory(self, q_func):
+  def simulate_one_trajectory(self, q_func, T=400, init_q=False, toEnd=False):
     self.policy.start_episode()
     obs = self.suite_env.reset()
     state_dict = self.suite_env.get_state()
     obs = self.suite_env.reset_to(state_dict)
-
-    traj = dict(actions=[], rewards=[], dones=[], states=[], initial_state_dict=state_dict)
-
-    for _ in range(self.timeout):
-        # get action from policy
-        act = self.policy(ob=obs)
-        # play action
-        next_obs, _, done, _ = self.step(act)
-        success = self.suite_env.is_success()["task"]
+    result = 0
+    states = []
+    initial_q = None
+    states.append(self.state)
+    for _ in range(T):
+        obs = self.convert_obs_to_np(obs)
+        state_tensor = torch.FloatTensor(obs)
+        state_tensor = state_tensor.to(self.device).unsqueeze(0)        
+        if initial_q is None:
+            initial_q = q_func(state_tensor).item()
+        # step env
+        next_obs, _, done, _ = self.step()
+        obs = next_obs
+        states.append(next_obs)
         # visualization
         if self.render:
             self.suite_env.render(mode="human", camera_name="frontview")
-        # collect transition
-        traj["actions"].append(act)
-        traj["dones"].append(done)
-        traj["states"].append(state_dict["states"])
+        l_x = self.target_margin(self.state)
+        g_x = self.safety_margin(self.state)
         # break if done or if success
-        if done or success:
+        if l_x <= 0:
+            result = 1 #Success
             break
+        if done or g_x > 0:
+            result = -1 #Failed
         # update for next iter
-        obs = deepcopy(next_obs)
-        state_dict = self.suite_env.get_state()
-    
-    # list to numpy array
-    for k in traj:
-        if k == "initial_state_dict":
-            continue
-        if isinstance(traj[k], dict):
-            for kp in traj[k]:
-                traj[k][kp] = np.array(traj[k][kp])
-        else:
-            traj[k] = np.array(traj[k])
-    return traj
+    if init_q:
+      return states, result, initial_q
+    return states, result
 
-
-  def simulate_trajectories(self, q_func, num_traj):
+  def simulate_trajectories(self, q_func, T=400, num_rnd_traj=None, toEnd=False):
     trajectories = []
-    results = np.empty(shape=(num_traj,), dtype=int)
-    for idx in range(num_traj):
-        traj_x, traj_y, result = self.simulate_one_trajectory(q_func)
-        trajectories.append((traj_x, traj_y))
+    results = np.empty(shape=(num_rnd_traj,), dtype=int)
+    for idx in range(num_rnd_traj):
+        traj, result = self.simulate_one_trajectory(q_func=q_func, T=T)
+        trajectories.append((traj))
         results[idx] = result
-    return trajectories
+    return trajectories, results
+  
+  def get_warmup_examples(self, num_warmup_samples=100, s_margin=False):
+    """Gets warmup samples to initialize the Q-network.
+
+    Args:
+        num_warmup_samples (int, optional): # warmup samples. Defaults to 100.
+        s_margin (bool, optional): use safety margin as heuristic values if
+            True. If False, use max{ell, g} instead. Defaults to true.
+
+    Returns:
+        np.ndarray: sampled states.
+        np.ndarray: the heuristic values.
+    """
+    rv = np.random.uniform(
+        low=self.bounds[:, 0], high=self.bounds[:, 1],
+        size=(num_warmup_samples, self.obs_dim)
+    )
+
+    heuristic_v = np.zeros((num_warmup_samples, self.action_space.n))
+    states = np.zeros((num_warmup_samples, self.observation_space.shape[0]))
+
+    for i in range(num_warmup_samples):
+      s = np.array(rv[i, :])
+      if s_margin:
+        g_x = self.safety_margin(s)
+        heuristic_v[i, :] = g_x
+        states[i, :] = s
+      else:
+        l_x = self.target_margin(s)
+        g_x = self.safety_margin(s)
+        heuristic_v[i, :] = np.maximum(l_x, g_x)
+        states[i, :] = s
+    return states, heuristic_v
+
+  def confusion_matrix(self, q_func, num_states=50):
+    """Gets the confusion matrix using DDQN values and rollout results.
+
+    Args:
+        q_func (object): agent's Q-network.
+        num_states (int, optional): # initial states to rollout a trajectoy.
+            Defaults to 50.
+
+    Returns:
+        np.ndarray: confusion matrix.
+    """
+    confusion_matrix = np.array([[0.0, 0.0], [0.0, 0.0]])
+    for ii in range(num_states):
+      _, result, initial_q = self.simulate_one_trajectory(
+          q_func, init_q=True
+      )
+      assert (result == 1) or (result == -1)
+      # note that signs are inverted
+      if -int(np.sign(initial_q)) == np.sign(result):
+        if np.sign(result) == 1:
+          # True Positive. (reaches and it predicts so)
+          confusion_matrix[0, 0] += 1.0
+        elif np.sign(result) == -1:
+          # True Negative. (collides and it predicts so)
+          confusion_matrix[1, 1] += 1.0
+      else:
+        if np.sign(result) == 1:
+          # False Positive.(reaches target, predicts it will collide)
+          confusion_matrix[0, 1] += 1.0
+        elif np.sign(result) == -1:
+          # False Negative.(collides, predicts it will reach target)
+          confusion_matrix[1, 0] += 1.0
+    return confusion_matrix / num_states

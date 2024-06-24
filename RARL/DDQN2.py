@@ -13,7 +13,7 @@ https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
 import torch
 import torch.optim as optim
 import abc
-
+import numpy as np
 from collections import namedtuple
 import os
 import pickle
@@ -25,14 +25,14 @@ from .utils import soft_update, save_model
 Transition = namedtuple("Transition", ["s", "a", "r", "s_", "info"])
 
 
-class DDQN(abc.ABC):
+class DDQN2(abc.ABC):
   """
   The parent class for DDQNSingle and DDQNPursuitEvasion. Implements the
   basic utils functions and defines abstract functions to be implemented in
   the child class.
   """
 
-  def __init__(self, CONFIG):
+  def __init__(self, CONFIG, keys=None, dimList=None):
     """Initializes DDQN with a configuration file.
 
     Args:
@@ -42,7 +42,9 @@ class DDQN(abc.ABC):
             architecture, update methods.
     """
     self.CONFIG = CONFIG
+    self.keys = keys
     self.saved = False
+    self.dimList = dimList
     self.memory = ReplayMemory(CONFIG.MEMORY_CAPACITY)
 
     # == PARAM ==
@@ -226,14 +228,23 @@ class DDQN(abc.ABC):
     """
     # `non_final_mask` is used for environments that have next state to be
     # None.
-    
+    converted_s_ = [
+        self.convert_obs_to_np(s) if isinstance(s, dict) else s
+        for s in batch.s_
+    ]
     non_final_mask = torch.tensor(
-        tuple(map(lambda s: s is not None, batch.s_)), dtype=torch.bool
+        tuple(map(lambda s: s is not None, converted_s_)), dtype=torch.bool
     ).to(self.device)
     non_final_state_nxt = torch.FloatTensor([
-        s for s in batch.s_ if s is not None
+        s for s in converted_s_ if s is not None
     ]).to(self.device)
-    state = torch.FloatTensor(batch.s).to(self.device)
+
+    converted_s = [
+        self.convert_obs_to_np(s) if isinstance(s, dict) else s
+        for s in batch.s
+    ]
+
+    state = torch.FloatTensor(converted_s).to(self.device)
     action = torch.LongTensor(batch.a).to(self.device).view(-1, 1)
     reward = torch.FloatTensor(batch.r).to(self.device)
     g_x = torch.FloatTensor([info["g_x"] for info in batch.info])
@@ -245,3 +256,28 @@ class DDQN(abc.ABC):
     return (
         non_final_mask, non_final_state_nxt, state, action, reward, g_x, l_x
     )
+
+  def convert_obs_to_np(self, obs):
+    # Initialize an empty NumPy array with the desired shape
+    obs_np = np.zeros(self.dimList[0])
+    total_shape = 0
+    
+    # Loop through the keys in the specified order
+    for key in self.keys:
+        # Map 'object-state' to 'object'
+        if key == "object-state":
+            key = "object"
+        
+        # Flatten the observation value and get its shape
+        obs_val = obs[key].flatten()
+        shape = obs_val.shape[0]
+        
+        # If the observation value is a torch.Tensor, convert it to a NumPy array
+        if isinstance(obs_val, torch.Tensor):
+            obs_val = obs_val.detach().cpu().numpy()
+        
+        # Assign the flattened observation values to the appropriate slice of obs_np
+        obs_np[total_shape:total_shape + shape] = obs_val
+        total_shape += shape
+    
+    return obs_np

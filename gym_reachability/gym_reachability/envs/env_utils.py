@@ -42,7 +42,6 @@ def calculate_signed_distance(eef_pos, object_pos, object_dims):
     """
     # Calculate the Euclidean distance
     distance = np.linalg.norm(eef_pos - object_pos)
-
     # Check if the end effector is inside the object
     inside = np.all(np.abs(eef_pos - object_pos) <= np.array(object_dims))
 

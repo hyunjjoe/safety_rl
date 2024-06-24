@@ -11,7 +11,7 @@ import torch
 import torch
 from omegaconf import OmegaConf
 
-from RARL.DDQNNom import DDQNNom
+from RARL.DDQNPolicy import DDQNPolicy
 from RARL.config import dqnConfig
 from gym_reachability import gym_reachability  # Custom Gym env.
 from omegaconf import OmegaConf
@@ -47,7 +47,7 @@ parser.add_argument(
 )
 parser.add_argument(
       "-cf", "--config_file", help="config file path", type=str,
-      default=os.path.join("config", "reach.yaml")
+      default=os.path.join("config", "reach_policy.yaml")
 )
 
 
@@ -135,13 +135,13 @@ parser.add_argument(
 args = parser.parse_args()
 
 # == CONFIGURATION ==
-env_name = "reach_nom-v0"
+env_name = "reach_policy-v0"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 fn = args.name + '-' + args.doneType
 if args.showTime:
   fn = fn + '-' + timestr
 
-outFolder = os.path.join(args.outFolder, 'ReachNom-DDQN', fn)
+outFolder = os.path.join(args.outFolder, 'ReachPolicy-DDQN', fn)
 print(outFolder)
 
 CONFIG = dqnConfig(
@@ -209,9 +209,8 @@ def run_experiment(args, CONFIG, env):
   numAction = env.action_space.n
   actionList = np.arange(numAction)
   dimList = [s_dim] + args.architecture + [numAction]
-
   np.random.seed(args.randomSeed)
-  agent = DDQNNom(CONFIG, numAction, actionList, dimList, mode='RA')
+  agent = DDQNPolicy(CONFIG, numAction, actionList, dimList, cfg=cfg.environment, mode='RA')
   _, trainProgress = agent.learn(
       env,
       MAX_UPDATES=CONFIG.MAX_UPDATES,

@@ -36,6 +36,11 @@ register(
 )
 
 register(
+    id="reach_policy-v0",
+    entry_point="gym_reachability.gym_reachability.envs:ReachPolicyEnv"
+)
+
+register(
     id="dubins_car_pe-v0",
     entry_point="gym_reachability.gym_reachability.envs:DubinsCarPEEnv"
 )

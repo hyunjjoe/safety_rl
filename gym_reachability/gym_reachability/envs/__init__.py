@@ -11,6 +11,8 @@ from .dubins_car_param import DubinsCarParamEnv
 
 from .reach_nom import ReachNomEnv
 
+from .reach_policy import ReachPolicyEnv
+
 from .dubins_car_param2 import DubinsCarParam2Env
 
 from .one_player_reach_avoid_lunar_lander import OnePlayerReachAvoidLunarLander
