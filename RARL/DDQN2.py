@@ -198,15 +198,14 @@ class DDQN2(abc.ABC):
       pickle.dump(self.CONFIG, open(config_path, "wb"))
       self.saved = True
 
-  def restore(self, step, logs_path, verbose=True):
+  def restore(self, logs_path, verbose=True):
     """Restores the model weights from the given model path.
 
     Args:
         step (int): the number of updates of the model.
-        logs_path (str): he folder path of the model.
+        logs_path (str): the folder path of the model.
         verbose (bool, optional): print messages if True. Defaults to True.
     """
-    logs_path = os.path.join(logs_path, "model", "Q-{}.pth".format(step))
     self.Q_network.load_state_dict(
         torch.load(logs_path, map_location=self.device)
     )

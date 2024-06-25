@@ -66,7 +66,7 @@ parser.add_argument(
     type=int
 )
 parser.add_argument(
-    "-ms", "--maxSteps", help="maximal length of rollouts", default=200,
+    "-ms", "--maxSteps", help="maximal length of rollouts", default=500,
     type=int
 )
 parser.add_argument(
@@ -122,7 +122,7 @@ parser.add_argument(
 parser.add_argument("-n", "--name", help="extra name", default='', type=str)
 parser.add_argument(
     "-of", "--outFolder", help="output file",
-    default='experiments/Reach_nom' + timestr, type=str
+    default='safety_rl/experiments/Reach_policy' + timestr, type=str
 )
 parser.add_argument(
     "-pf", "--plotFigure", help="plot figures", action="store_true"
@@ -215,7 +215,7 @@ def run_experiment(args, CONFIG, env):
       env,
       MAX_UPDATES=CONFIG.MAX_UPDATES,
       MAX_EP_STEPS=CONFIG.MAX_EP_STEPS,
-      warmupBuffer=False,
+      warmupBuffer=True,
       warmupQ=args.warmup,
       warmupIter=args.warmupIter,
       addBias=args.addBias,
@@ -235,5 +235,42 @@ def run_experiment(args, CONFIG, env):
   )
   return trainProgress
 
-run_experiment(args, CONFIG, env)
+# == TEST ==
+def test_experiment(path, config_path, env, doneType='toEnd'):
+  """Plot the value function slices.
+
+  Args:
+      path (string): path to the model file *.pth.
+      config_path (string): path to the CONFIG.pkl file of the experiment.
+      env (gym.Env): environment used for training.
+      doneType (string, optional): termination type for episodes.
+  """
+  s_dim = env.observation_space.shape[0]
+  numAction = env.action_space.n
+  actionList = np.arange(numAction)
+
+  if os.path.isfile(config_path):
+    CONFIG_ = pickle.load(open(config_path, 'rb'))
+    for k in CONFIG_.__dict__:
+      CONFIG.__dict__[k] = CONFIG_.__dict__[k]
+    CONFIG.DEVICE = device
+  report_config(CONFIG)
+
+  env.doneType = doneType
+
+  dimList = [s_dim] + CONFIG.ARCHITECTURE + [numAction]
+  agent = DDQNPolicy(
+      CONFIG, numAction, actionList, dimList, cfg=cfg.environment, mode='RA'
+  )
+  agent.restore(path)
+  confusion = env.confusion_matrix(q_func=agent.Q_network, num_states=100)
+  print("True Positive", confusion[0, 0])
+  print("True Negative", confusion[1, 1])
+  print("False Positive", confusion[0, 1])
+  print("False Negative", confusion[1, 0])
+
+if args.test:
+    test_experiment(args.path, args.config_path, env)
+else:  
+    run_experiment(args, CONFIG, env)
 
