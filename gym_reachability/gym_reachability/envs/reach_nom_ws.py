@@ -8,18 +8,17 @@ import random
 import robosuite as suite
 from robosuite.wrappers import GymWrapper
 from omegaconf import OmegaConf
-from robosuite.environments.manipulation.grasp import Grasp
+from robosuite.environments.manipulation.reach import Reach
 from robomimic.utils.file_utils import policy_from_checkpoint, env_from_checkpoint
 from copy import deepcopy
 from .env_utils import calculate_margin_cube, calculate_signed_distance
 
-class ReachPolicyEnv(gym.Env):
-  """Wrapper class for the Grasp env in Robosuite
+class ReachNomWSEnv(gym.Env):
+  """Wrapper class for the Reach env in Robosuite
   """
-
   def __init__(
       self, device, cfg_env, mode="RA", doneType="toEnd", sample_inside_obs=True,
-      sample_inside_tar=True, render=False, vis_callback=None
+      sample_inside_tar=True, render=True, vis_callback=None
   ):
     """Initializes the environment with given arguments.
 
@@ -39,30 +38,29 @@ class ReachPolicyEnv(gym.Env):
       raise NotImplementedError("Only Reach environment is supported")
     keys = cfg_env.obs_keys
     self.keys = keys
-    horizon = cfg_env.robosuite.horizon
+    self.horizon = cfg_env.robosuite.horizon
     config_suite = OmegaConf.to_container(cfg_env.robosuite)
     env = GymWrapper(suite.make(env_id, **config_suite), keys=keys)
     self.gym_env = env
     self.observation_space = self.gym_env.observation_space
-
     checkpoint = f"{cfg_env.checkpoint_folder}/models/{cfg_env.checkpoint}"
     policy, ckpt_dict = policy_from_checkpoint(
             ckpt_path=checkpoint,
     )
     self.policy = policy
-    
     self.render = render
-    self.vis_callback = vis_callback
+    self.vis_callback = vis_callback  
     env, _ = env_from_checkpoint(ckpt_dict=ckpt_dict, render=self.render)    
     self.suite_env = env
     self.state = self.suite_env.reset()
     self.timeout = self.suite_env.env.horizon
-    
+    self.viewer = None  # Initialize viewer attribute
+
     #State Space to train VF on (16 dimensions)
     self.bounds = np.array([
-        [-0.4, 0.4], #ee x pos (Table bounds (x))
-        [-0.4, 0.4], #ee y pos (Table bounds (y))
-        [0.81, 1.2], #ee z pos (Table bounds (z))
+        [-0.8, 0.8], #ee x pos (Table bounds (x))
+        [-0.8, 0.8], #ee y pos (Table bounds (y))
+        [0.81, 1.5], #ee z pos (Table bounds (z))
         [-1, 1], #quat x
         [-1, 1], #quat y
         [-1, 1], #quat z
@@ -81,13 +79,22 @@ class ReachPolicyEnv(gym.Env):
     self.high = self.bounds[:, 1]
     self.midpoint = (self.low + self.high) / 2.0
     self.interval = self.high - self.low
-    self.sample_inside_obs = sample_inside_obs
-    self.sample_inside_tar = sample_inside_tar
     self.obs_dim = 16
     self.object_dims = (0.02, 0.02, 0.02)
-    self.numActionList = [1,1,1,1,1,1,1]
-    self.action_space = gym.spaces.Discrete(1) #Would be 1 for policies (1^7)
-
+    self.numActionList = [3,3,3,3,3,3,3] #1, 1, 1, 1, 1, 1, 1
+    self.action_space = gym.spaces.Discrete(3**7) #Would be 1 for policies (1^7)
+    self.discrete_controls = np.array([
+    [-1, 0, 1],
+    [-1, 0, 1],
+    [-1, 0, 1],
+    [-1, 0, 1],
+    [-1, 0, 1],
+    [-1, 0, 1],
+    [-1, 0, 1]
+        ])
+    self.sample_inside_obs = sample_inside_obs
+    self.sample_inside_tar = sample_inside_tar
+        
     #Internal state
     self.mode = mode
     self.doneType = doneType
@@ -101,14 +108,11 @@ class ReachPolicyEnv(gym.Env):
     self.device = device
     self.scaling = 1.0
 
-    #Failure set: Boundary of the state space
-
     print(
         "Env: mode-{:s}; doneType-{:s}; sample_inside_obs-{}".format(
             self.mode, self.doneType, self.sample_inside_obs
         )
     )
-  # == Getting Functions ==
   def check_within_bounds(self, state):
     """Checks if the agent is still in the environment.
 
@@ -123,6 +127,10 @@ class ReachPolicyEnv(gym.Env):
     for dim, bound in enumerate(self.bounds):
       flagLow = state[dim] < bound[0]
       flagHigh = state[dim] > bound[1]
+      if flagLow:
+        print(f"Dimension {dim} out of bounds: {state[dim]} < {bound[0]}")
+      if flagHigh:
+        print(f"Dimension {dim} out of bounds: {state[dim]} > {bound[1]}")
       if flagLow or flagHigh:
         return False
     return True
@@ -144,7 +152,7 @@ class ReachPolicyEnv(gym.Env):
       #Solely Cube and EE rel pos
       target_margin = calculate_signed_distance(eef_pos=s[:3], object_pos=s[9:12], object_dims=self.object_dims)
       return target_margin
-  
+
   def _reset_suite(self, state=None):
         if state is not None:
             state = state.item()
@@ -163,21 +171,21 @@ class ReachPolicyEnv(gym.Env):
         return obs
     
   def convert_obs_to_np(self, obs):
-    # Initialize an empty NumPy array with the desired shape
-    obs_np = np.zeros(self.observation_space.shape)
-    total_shape = 0
-    for key in self.keys:
-        if key == "object-state":
-            key = "object"
-        obs_val = obs[key].flatten()
-        shape = obs_val.shape[0]
-        if isinstance(obs_val, torch.Tensor):
-            obs_val = obs_val.detach().cpu().numpy()
-        obs_np[total_shape:total_shape + shape] = obs_val
-        total_shape += shape
-    return obs_np
-  
-  def step(self, act=0):
+        # loop through keys in proper order and create numpy observation
+        obs_np = np.zeros(self.observation_space.shape)
+        total_shape = 0
+        for key in self.keys:
+            if key == "object-state":
+                key = "object"
+            shape = obs[key].flatten().shape[0]
+            obs_val = obs[key].flatten()
+            if isinstance(obs_val, torch.Tensor):
+                obs_val = obs_val.detach().cpu().numpy()
+            obs_np[total_shape:total_shape+shape] = obs_val
+            total_shape += shape
+        return obs_np
+
+  def step(self, act):
     """Evolves the environment one step forward for manipulator.
 
     Returns:
@@ -186,19 +194,23 @@ class ReachPolicyEnv(gym.Env):
         bool: True if the episode is terminated for any lander.
         dict: dictionary with safety and target margins.
     """
-    # call policy
-    action = self.policy(ob=self.state)
     # play action
-    #Next State, Reward, Done (Task Success), Info
-    next_obs, _, _, _ = self.suite_env.step(action)
-    self.state = next_obs
+    # Decode the action index into discrete controls
 
-    #Safety Margin (boundary check)
+    #Unshaped action indicies vs. shaped action indicies (when simulating trajectories)
+    if isinstance(act, int):
+       act = np.unravel_index(act, self.numActionList)
+    else:
+      act = self.discrete_controls[np.arange(7), act]
+    next_obs, _, _, _ = self.suite_env.step(act)
+    self.state = next_obs
+    
+    #Target Margin
     l_x = self.target_margin(self.state)
     g_x = self.safety_margin(self.state)
     fail = g_x > 0
     success = l_x <= 0
-    
+
     # cost
     if self.mode == "RA":
       if fail:
@@ -219,30 +231,36 @@ class ReachPolicyEnv(gym.Env):
       info = {"g_x": g_x, "l_x": l_x}
     return self.state, cost, done, info
 
-  def simulate_one_trajectory(self, q_func, T=800, init_q=False, toEnd=False):
-    self.policy.start_episode()
-    obs = self.suite_env.reset()
-    state_dict = self.suite_env.get_state()
-    obs = self.suite_env.reset_to(state_dict)
+  def simulate_one_trajectory(self, q_func, T=400, init_q=False, toEnd=False):
+    obs = self._reset_suite()
     result = 0
     states = []
     initial_q = None
     states.append(self.state)
+    #if self.render:
+    #  self.render_sim()
     for _ in range(T):
         obs = self.convert_obs_to_np(obs)
         state_tensor = torch.FloatTensor(obs)
-        state_tensor = state_tensor.to(self.device).unsqueeze(0)        
+        state_tensor = state_tensor.to(self.device).unsqueeze(0)
+        with torch.no_grad():
+            state_action_values = q_func(state_tensor)
         if initial_q is None:
-            initial_q = q_func(state_tensor).item()
-        # step env
-        next_obs, _, done, _ = self.step()
-        obs = next_obs
-        states.append(next_obs)
+            initial_q = q_func(state_tensor).min(dim=1)[0].item()
+        #action 
+        min_index = state_action_values.argmin()
+        act = min_index.item()
+        # Reduce dimensions to find the argmax values
+        # Iterate through the dimensions to find the maximum values and indices
+        # play action
+        next_obs, _, done, _ = self.step(act)
         # visualization
         if self.render:
             self.suite_env.render(mode="human", camera_name="frontview")
         l_x = self.target_margin(self.state)
         g_x = self.safety_margin(self.state)
+        # visualization
+        # collect transition
         # break if done or if success
         if l_x <= 0:
             result = 1 #Success
@@ -250,11 +268,15 @@ class ReachPolicyEnv(gym.Env):
         if done or g_x > 0:
             result = -1 #Failed
         # update for next iter
+        obs = deepcopy(next_obs)
+    #if result == 0:
+    #   result = -1
+    # list to numpy array
     if init_q:
       return states, result, initial_q
     return states, result
 
-  def simulate_trajectories(self, q_func, T=800, num_rnd_traj=None, toEnd=False):
+  def simulate_trajectories(self, q_func, T=400, num_rnd_traj=None, toEnd=False):
     trajectories = []
     results = np.empty(shape=(num_rnd_traj,), dtype=int)
     for idx in range(num_rnd_traj):

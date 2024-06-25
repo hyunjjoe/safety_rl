@@ -17,17 +17,17 @@ Here we aim to minimize the reach-avoid cost, given by the Bellman backup:
 import torch
 import torch.nn as nn
 from torch.nn.functional import mse_loss, smooth_l1_loss
-
+from robomimic.utils.file_utils import policy_from_checkpoint, env_from_checkpoint
 import numpy as np
 import matplotlib.pyplot as plt
 import os
 import time
 
 from .model import Model
-from .DDQN import DDQN, Transition
+from .DDQN2 import DDQN2, Transition
 
 
-class DDQNNom(DDQN):
+class DDQNNom(DDQN2):
   """
   Implements the double deep Q-network algorithm. Supports minimizing the
   reach-avoid cost or the standard sum of discounted costs.
@@ -37,7 +37,7 @@ class DDQNNom(DDQN):
   """
 
   def __init__(
-      self, CONFIG, numAction, actionList, dimList, mode="RA",
+      self, CONFIG, numAction, actionList, dimList, cfg=None, mode="RA",
       terminalType="g", verbose=True
   ):
     """
@@ -56,11 +56,16 @@ class DDQNNom(DDQN):
             Defaults to 'g'.
         verbose (bool, optional): print the messages if True. Defaults to True.
     """
-    super(DDQNNom, self).__init__(CONFIG)
+    super(DDQNNom, self).__init__(CONFIG, keys=cfg.obs_keys, dimList=dimList)
 
     self.mode = mode  # 'normal' or 'RA'
     self.terminalType = terminalType
-
+    self.keys = cfg.obs_keys
+    checkpoint = f"{cfg.checkpoint_folder}/models/{cfg.checkpoint}"
+    policy, ckpt_dict = policy_from_checkpoint(
+            ckpt_path=checkpoint,
+    )
+    self.policy = policy
     # == ENV PARAM ==
     self.numAction = numAction
     self.actionList = actionList
@@ -203,11 +208,12 @@ class DDQNNom(DDQN):
         env (gym.Env): the environment we interact with.
     """
     cnt = 0
+    s = env.reset()
     while len(self.memory) < self.memory.capacity:
       cnt += 1
       print("\rWarmup Buffer [{:d}]".format(cnt), end="")
-      s = env.reset()
-      a, a_idx = self.select_action(s, explore=True)
+      #s = env.reset()
+      a, a_idx = self.select_action_policy(s, explore=True)
       s_, r, done, info = env.step(a_idx)
       s_ = None if done else s_
       self.store_transition(s, a_idx, r, s_, info)
@@ -502,9 +508,64 @@ class DDQNNom(DDQN):
     """
     self.Q_network.eval()
     # tensor.min() returns (value, indices), which are in the tensor form.
+    state = self.convert_obs_to_np(state)
     state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
     if (np.random.rand() < self.EPSILON) and explore:
       action_index = np.random.randint(0, self.numAction)
     else:
       action_index = self.Q_network(state).min(dim=1)[1].item()
     return self.actionList[action_index], action_index
+
+  def select_action_policy(self, state, explore=False):
+    action = self.policy(ob=state)
+    print(action)
+    action = np.where(np.abs(action) < 0.05, 0, np.where(action > 0, 1, -1))
+    print(action)
+    if (np.random.rand() < self.EPSILON) and explore:
+      action_index = np.random.randint(0, self.numAction)
+    else:
+      action_index = self.actions_to_index(action)
+    return self.actionList[action_index], action_index
+  
+  def convert_obs_to_np(self, obs):
+    # Initialize an empty NumPy array with the desired shape
+    obs_np = np.zeros(self.dimList[0])
+    total_shape = 0
+    
+    # Loop through the keys in the specified order
+    for key in self.keys:
+        # Map 'object-state' to 'object'
+        if key == "object-state":
+            key = "object"
+        
+        # Flatten the observation value and get its shape
+        obs_val = obs[key].flatten()
+        shape = obs_val.shape[0]
+        
+        # If the observation value is a torch.Tensor, convert it to a NumPy array
+        if isinstance(obs_val, torch.Tensor):
+            obs_val = obs_val.detach().cpu().numpy()
+        
+        # Assign the flattened observation values to the appropriate slice of obs_np
+        obs_np[total_shape:total_shape + shape] = obs_val
+        total_shape += shape
+    
+    return obs_np
+  
+  def actions_to_index(self, actions):  
+    """
+    Convert a list of actions (-1, 1) to an action index.
+    
+    Args:
+    - actions (list of int): List of actions, each action is either -1 or 1.
+    
+    Returns:
+    - int: The corresponding action index.
+    """
+    # Convert actions to binary (0 for -1, 1 for 1)
+    ternary_str = ''.join(['0' if action == -1 else '2' if action == 1 else '1' for action in actions])
+    
+    # Convert binary string to decimal index
+    action_index = int(ternary_str, 3)
+    
+    return action_index

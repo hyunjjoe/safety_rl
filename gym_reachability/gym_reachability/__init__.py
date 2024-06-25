@@ -36,6 +36,11 @@ register(
 )
 
 register(
+    id="reach_nom_ws-v0",
+    entry_point="gym_reachability.gym_reachability.envs:ReachNomWSEnv"
+)
+
+register(
     id="reach_policy-v0",
     entry_point="gym_reachability.gym_reachability.envs:ReachPolicyEnv"
 )

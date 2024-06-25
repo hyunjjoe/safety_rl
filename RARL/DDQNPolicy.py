@@ -17,7 +17,7 @@ Here we aim to minimize the reach-avoid cost, given by the Bellman backup:
 import torch
 import torch.nn as nn
 from torch.nn.functional import mse_loss, smooth_l1_loss
-
+from robomimic.utils.file_utils import policy_from_checkpoint, env_from_checkpoint
 import numpy as np
 import matplotlib.pyplot as plt
 import os
@@ -61,6 +61,11 @@ class DDQNPolicy(DDQN2):
     self.mode = mode  # 'normal' or 'RA'
     self.terminalType = terminalType
     self.keys = cfg.obs_keys
+    checkpoint = f"{cfg.checkpoint_folder}/models/{cfg.checkpoint}"
+    policy, ckpt_dict = policy_from_checkpoint(
+            ckpt_path=checkpoint,
+    )
+    self.policy = policy
     # == ENV PARAM ==
     self.numAction = numAction
     self.actionList = actionList
@@ -203,12 +208,14 @@ class DDQNPolicy(DDQN2):
         env (gym.Env): the environment we interact with.
     """
     cnt = 0
+    s = env.reset()
     while len(self.memory) < self.memory.capacity:
       cnt += 1
       print("\rWarmup Buffer [{:d}]".format(cnt), end="")
-      s = env.reset()
+      #s = env.reset()
       a, a_idx = self.select_action(s, explore=True)
       s_, r, done, info = env.step(a_idx)
+      #print(info)
       s_ = None if done else s_
       self.store_transition(s, a_idx, r, s_, info)
       if done:
@@ -287,7 +294,7 @@ class DDQNPolicy(DDQN2):
     return lossList
 
   def learn(
-      self, env, MAX_UPDATES=2000000, MAX_EP_STEPS=100, warmupBuffer=True,
+      self, env, MAX_UPDATES=2000000, MAX_EP_STEPS=800, warmupBuffer=True,
       warmupQ=False, warmupIter=10000, addBias=False, doneTerminate=True,
       runningCostThr=None, curUpdates=None, checkPeriod=50000, plotFigure=True,
       storeFigure=False, showBool=False, vmin=-1, vmax=1, numRndTraj=200,
@@ -508,12 +515,16 @@ class DDQNPolicy(DDQN2):
     else:
       action_index = self.Q_network(state).min(dim=1)[1].item()
     return self.actionList[action_index], action_index
+
+  def select_action_policy(self, state, explore=False):
+    action = self.policy(ob=state)
+    return action, 0
   
   def convert_obs_to_np(self, obs):
     # Initialize an empty NumPy array with the desired shape
     obs_np = np.zeros(self.dimList[0])
     total_shape = 0
-    
+   
     # Loop through the keys in the specified order
     for key in self.keys:
         # Map 'object-state' to 'object'

@@ -11,6 +11,8 @@ from .dubins_car_param import DubinsCarParamEnv
 
 from .reach_nom import ReachNomEnv
 
+from .reach_nom_ws import ReachNomWSEnv
+
 from .reach_policy import ReachPolicyEnv
 
 from .dubins_car_param2 import DubinsCarParam2Env

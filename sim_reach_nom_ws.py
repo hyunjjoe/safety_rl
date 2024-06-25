@@ -11,7 +11,7 @@ import torch
 import torch
 from omegaconf import OmegaConf
 
-from safety_rl.RARL.DDQNSingle import DDQNSingle
+from safety_rl.RARL.DDQNNom import DDQNNom
 from RARL.config import dqnConfig
 from gym_reachability import gym_reachability  # Custom Gym env.
 from omegaconf import OmegaConf
@@ -122,7 +122,7 @@ parser.add_argument(
 parser.add_argument("-n", "--name", help="extra name", default='', type=str)
 parser.add_argument(
     "-of", "--outFolder", help="output file",
-    default='experiments/Reach_nom' + timestr, type=str
+    default='safety_rl/experiments/Reach_nom_ws' + timestr, type=str
 )
 parser.add_argument(
     "-pf", "--plotFigure", help="plot figures", action="store_true"
@@ -131,17 +131,16 @@ parser.add_argument(
     "-sf", "--storeFigure", help="store figures", action="store_true"
 )
 
-
 args = parser.parse_args()
 
 # == CONFIGURATION ==
-env_name = "reach_nom-v0"
+env_name = "reach_nom_ws-v0"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 fn = args.name + '-' + args.doneType
 if args.showTime:
   fn = fn + '-' + timestr
 
-outFolder = os.path.join(args.outFolder, 'ReachNom-DDQN', fn)
+outFolder = os.path.join(args.outFolder, 'ReachNomWS-DDQN', fn)
 print(outFolder)
 
 CONFIG = dqnConfig(
@@ -209,14 +208,13 @@ def run_experiment(args, CONFIG, env):
   numAction = env.action_space.n
   actionList = np.arange(numAction)
   dimList = [s_dim] + args.architecture + [numAction]
-
   np.random.seed(args.randomSeed)
-  agent = DDQNSingle(CONFIG, numAction, actionList, dimList, mode='RA')
+  agent = DDQNNom(CONFIG, numAction, actionList, dimList, cfg=cfg.environment, mode='RA')
   _, trainProgress = agent.learn(
       env,
       MAX_UPDATES=CONFIG.MAX_UPDATES,
       MAX_EP_STEPS=CONFIG.MAX_EP_STEPS,
-      warmupBuffer=False,
+      warmupBuffer=True,
       warmupQ=args.warmup,
       warmupIter=args.warmupIter,
       addBias=args.addBias,
