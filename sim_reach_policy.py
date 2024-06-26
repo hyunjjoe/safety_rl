@@ -215,7 +215,7 @@ def run_experiment(args, CONFIG, env):
       env,
       MAX_UPDATES=CONFIG.MAX_UPDATES,
       MAX_EP_STEPS=CONFIG.MAX_EP_STEPS,
-      warmupBuffer=True,
+      warmupBuffer=False,
       warmupQ=args.warmup,
       warmupIter=args.warmupIter,
       addBias=args.addBias,
