@@ -159,7 +159,6 @@ class ReachPolicyEnv(gym.Env):
 
   def reset(self):
         obs = self._reset_suite()
-        # return self.convert_obs_to_np(obs)
         return obs
     
   def convert_obs_to_np(self, obs):
@@ -213,7 +212,7 @@ class ReachPolicyEnv(gym.Env):
       done = not self.check_within_bounds(self.state)
 
     # = `info`
-    if done and self.doneType == "fail":
+    if self.doneType == "fail":
       info = {"g_x": self.penalty * self.scaling}
     else:
       info = {"g_x": g_x, "l_x": l_x}
@@ -250,6 +249,8 @@ class ReachPolicyEnv(gym.Env):
         if done or g_x > 0:
             result = -1 #Failed
         # update for next iter
+    if result == 0:
+      result = -1
     if init_q:
       return states, result, initial_q
     return states, result
