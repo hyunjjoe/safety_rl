@@ -73,7 +73,7 @@ parser.add_argument(
     "-mc", "--memoryCapacity", help="memoryCapacity", default=150000, type=int
 )
 parser.add_argument(
-    "-cp", "--checkPeriod", help="check the success ratio", default=50000,
+    "-cp", "--checkPeriod", help="check the success ratio", default=100000,
     type=int
 )
 parser.add_argument(
