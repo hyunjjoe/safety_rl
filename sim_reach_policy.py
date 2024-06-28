@@ -26,6 +26,9 @@ parser.add_argument(
     "-nt", "--num_test", help="the number of tests", default=1, type=int
 )
 parser.add_argument(
+    "-ooa", "--opt_alts", help="opts", action="store_true"
+)
+parser.add_argument(
     "-nw", "--num_worker", help="the number of workers", default=1, type=int
 )
 parser.add_argument(
@@ -235,7 +238,7 @@ def run_experiment(args, CONFIG, env):
   )
   return trainProgress
 
-# == TEST ==
+# == VALDIATE VF ==
 def test_experiment(path, config_path, env, doneType='toEnd'):
   """Plot the value function slices.
 
@@ -263,14 +266,46 @@ def test_experiment(path, config_path, env, doneType='toEnd'):
       CONFIG, numAction, actionList, dimList, cfg=cfg.environment, mode='RA'
   )
   agent.restore(path)
-  confusion = env.confusion_matrix(q_func=agent.Q_network, num_states=100)
+  confusion = env.confusion_matrix(q_func=agent.Q_network, num_states=1000)
   print("True Positive", confusion[0, 0])
   print("True Negative", confusion[1, 1])
   print("False Positive", confusion[0, 1])
   print("False Negative", confusion[1, 0])
 
+# == RUN OOA ==
+def run_ooa(path, config_path, env, doneType='toEnd'):
+  """Plot the value function slices.
+
+  Args:
+      path (string): path to the model file *.pth.
+      config_path (string): path to the CONFIG.pkl file of the experiment.
+      env (gym.Env): environment used for training.
+      doneType (string, optional): termination type for episodes.
+  """
+  s_dim = env.observation_space.shape[0]
+  numAction = env.action_space.n
+  actionList = np.arange(numAction)
+
+  if os.path.isfile(config_path):
+    CONFIG_ = pickle.load(open(config_path, 'rb'))
+    for k in CONFIG_.__dict__:
+      CONFIG.__dict__[k] = CONFIG_.__dict__[k]
+    CONFIG.DEVICE = device
+  report_config(CONFIG)
+
+  env.doneType = doneType
+
+  dimList = [s_dim] + CONFIG.ARCHITECTURE + [numAction]
+  agent = DDQNPolicy(
+      CONFIG, numAction, actionList, dimList, cfg=cfg.environment, mode='RA'
+  )
+  agent.restore(path)
+  env.ooa(q_func=agent.Q_network)
+
 if args.test:
     test_experiment(args.path, args.config_path, env)
+elif args.ooa:
+    run_ooa(args.path, args.config_path, env)
 else:  
     run_experiment(args, CONFIG, env)
 

@@ -8,7 +8,6 @@ import random
 import robosuite as suite
 from robosuite.wrappers import GymWrapper
 from omegaconf import OmegaConf
-from robosuite.environments.manipulation.grasp import Grasp
 from robomimic.utils.file_utils import policy_from_checkpoint, env_from_checkpoint
 from copy import deepcopy
 from .env_utils import calculate_margin_cube, calculate_signed_distance
