@@ -76,7 +76,7 @@ parser.add_argument(
     "-mc", "--memoryCapacity", help="memoryCapacity", default=150000, type=int
 )
 parser.add_argument(
-    "-cp", "--checkPeriod", help="check the success ratio", default=100000,
+    "-cp", "--checkPeriod", help="check the success ratio", default=500000,
     type=int
 )
 parser.add_argument(
@@ -133,7 +133,13 @@ parser.add_argument(
 parser.add_argument(
     "-sf", "--storeFigure", help="store figures", action="store_true"
 )
-
+parser.add_argument(
+    "-re", "--render", help="render", action="store_true"
+)
+parser.add_argument(
+    "-vp", "--video_path", help="video_path",
+    default='ooa/output.mp4', type=str
+)
 
 args = parser.parse_args()
 
@@ -166,7 +172,7 @@ CONFIG = dqnConfig(
     LR_C_DECAY=0.8,  # Learning rate decay rate.
     # =================== LEARNING RATE .
     GAMMA=args.gamma,  # Inital gamma.
-    GAMMA_END=0.99999,  # Final gamma.
+    GAMMA_END=0.999999,  # Final gamma.
     GAMMA_PERIOD=args.update_period_gamma,  # How often to update gamma.
     GAMMA_DECAY=0.1,  # Rate of decay of gamma.
     # ===================
@@ -176,7 +182,7 @@ CONFIG = dqnConfig(
     MEMORY_CAPACITY=args.memoryCapacity,
     BATCH_SIZE=args.batchsize,  # Number of examples to use to update Q.
     RENDER=False,
-    MAX_MODEL=10,  # How many models to store while training.
+    MAX_MODEL=11,  # How many models to store while training.
     DOUBLE=args.double,
     ARCHITECTURE=args.architecture,
     ACTIVATION=args.actType,
@@ -195,7 +201,7 @@ cfg = OmegaConf.load(args.config_file)
 
 # == ENVIRONMENT ==
 env = gym.make(
-    env_name, device=device, cfg_env=cfg.environment, mode="RA", doneType='toEnd'
+    env_name, device=device, cfg_env=cfg.environment, mode="RA", doneType='toEnd', render=args.render
 )
 
 # == EXPERIMENT ==
@@ -266,14 +272,14 @@ def test_experiment(path, config_path, env, doneType='toEnd'):
       CONFIG, numAction, actionList, dimList, cfg=cfg.environment, mode='RA'
   )
   agent.restore(path)
-  confusion = env.confusion_matrix(q_func=agent.Q_network, num_states=1000)
+  confusion = env.confusion_matrix(q_func=agent.Q_network, num_states=1)
   print("True Positive", confusion[0, 0])
   print("True Negative", confusion[1, 1])
   print("False Positive", confusion[0, 1])
   print("False Negative", confusion[1, 0])
 
 # == RUN OOA ==
-def run_ooa(path, config_path, env, doneType='toEnd'):
+def run_ooa(path, config_path, env, video_path, doneType='toEnd'):
   """Plot the value function slices.
 
   Args:
@@ -291,6 +297,7 @@ def run_ooa(path, config_path, env, doneType='toEnd'):
     for k in CONFIG_.__dict__:
       CONFIG.__dict__[k] = CONFIG_.__dict__[k]
     CONFIG.DEVICE = device
+    CONFIG.RENDER = True
   report_config(CONFIG)
 
   env.doneType = doneType
@@ -300,12 +307,12 @@ def run_ooa(path, config_path, env, doneType='toEnd'):
       CONFIG, numAction, actionList, dimList, cfg=cfg.environment, mode='RA'
   )
   agent.restore(path)
-  env.ooa(q_func=agent.Q_network)
+  env.ooa(q_func=agent.Q_network, video_path=video_path)
 
 if args.test:
     test_experiment(args.path, args.config_path, env)
-elif args.ooa:
-    run_ooa(args.path, args.config_path, env)
+elif args.opt_alts:
+    run_ooa(args.path, args.config_path, env, args.video_path)
 else:  
     run_experiment(args, CONFIG, env)
 

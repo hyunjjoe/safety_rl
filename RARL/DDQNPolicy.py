@@ -387,7 +387,9 @@ class DDQNPolicy(DDQN2):
       epCost = 0.0
       ep += 1
       # Rollout
+      
       for step_num in range(MAX_EP_STEPS):
+        updateStart = time.time()
         # Select action
         a, a_idx = self.select_action(s, explore=True)
         # Interact with env
@@ -455,11 +457,12 @@ class DDQNPolicy(DDQN2):
         trainingRecords.append(lossC)
         self.cntUpdate += 1
         self.updateHyperParam()
-
+        updateEnd = time.time()
+        #print("Update time", updateEnd-updateStart)
         # Terminate early
         if done and doneTerminate:
           break
-
+      
       # Rollout report
       runningCost = runningCost*0.9 + epCost*0.1
       if verbose:

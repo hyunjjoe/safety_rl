@@ -234,6 +234,7 @@ class DDQN2(abc.ABC):
     non_final_mask = torch.tensor(
         tuple(map(lambda s: s is not None, converted_s_)), dtype=torch.bool
     ).to(self.device)
+
     non_final_state_nxt = torch.FloatTensor([
         s for s in converted_s_ if s is not None
     ]).to(self.device)

@@ -11,6 +11,10 @@ from omegaconf import OmegaConf
 from robomimic.utils.file_utils import policy_from_checkpoint, env_from_checkpoint
 from copy import deepcopy
 from .env_utils import calculate_margin_cube, calculate_signed_distance
+import time
+from scipy.stats import truncnorm
+import itertools
+import imageio
 
 class ReachPolicyEnv(gym.Env):
   """Wrapper class for the Grasp env in Robosuite
@@ -52,7 +56,8 @@ class ReachPolicyEnv(gym.Env):
     
     self.render = render
     self.vis_callback = vis_callback
-    env, _ = env_from_checkpoint(ckpt_dict=ckpt_dict, render=self.render)    
+    self.render_offscreen = cfg_env.render_offscreen
+    env, _ = env_from_checkpoint(ckpt_dict=ckpt_dict, render=self.render, render_offscreen=self.render_offscreen)    
     self.suite_env = env
     self.state = self.suite_env.reset()
     self.timeout = self.suite_env.env.horizon
@@ -217,7 +222,8 @@ class ReachPolicyEnv(gym.Env):
       info = {"g_x": g_x, "l_x": l_x}
     return self.state, cost, done, info
 
-  def simulate_one_trajectory(self, q_func, T=800, init_q=False, toEnd=False):
+  def simulate_one_trajectory(self, q_func, T=400, init_q=False, toEnd=False):
+    start_time = time.time()
     self.policy.start_episode()
     obs = self.suite_env.reset()
     state_dict = self.suite_env.get_state()
@@ -248,19 +254,26 @@ class ReachPolicyEnv(gym.Env):
         if done or g_x > 0:
             result = -1 #Failed
         # update for next iter
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    #print(f"Traj Execution time: {elapsed_time:.4f} seconds")
     if result == 0:
       result = -1
     if init_q:
       return states, result, initial_q
     return states, result
 
-  def simulate_trajectories(self, q_func, T=800, num_rnd_traj=None, toEnd=False):
+  def simulate_trajectories(self, q_func, T=400, num_rnd_traj=None, toEnd=False):
     trajectories = []
+    start_time = time.time()
     results = np.empty(shape=(num_rnd_traj,), dtype=int)
     for idx in range(num_rnd_traj):
         traj, result = self.simulate_one_trajectory(q_func=q_func, T=T)
         trajectories.append((traj))
         results[idx] = result
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    #print(f"Traj Execution time: {elapsed_time:.4f} seconds")
     return trajectories, results
   
   def get_warmup_examples(self, num_warmup_samples=100, s_margin=False):
@@ -309,6 +322,7 @@ class ReachPolicyEnv(gym.Env):
     """
     confusion_matrix = np.array([[0.0, 0.0], [0.0, 0.0]])
     for ii in range(num_states):
+      print(ii)
       _, result, initial_q = self.simulate_one_trajectory(
           q_func, init_q=True
       )
@@ -329,3 +343,100 @@ class ReachPolicyEnv(gym.Env):
           # False Negative.(collides, predicts it will reach target)
           confusion_matrix[1, 0] += 1.0
     return confusion_matrix / num_states
+  
+  def ooa(self, q_func, video_path):
+    self.policy.start_episode()
+    obs = self.suite_env.reset()
+    state_dict = self.suite_env.get_state()
+    # Get the input from the user
+    loop_continue = True
+    while loop_continue:
+      while True:
+        user_input = input("Enter cube position (x,y): ")
+        x, y = map(float, user_input.strip('()').split(','))
+        if x <= 0.4 and y <= 0.4:
+           break
+        else:
+           print("Please place the cube within (-0.4,0.4)")
+      state_dict['states'][10:12] = [x, y]
+      obs = self.suite_env.reset_to(state_dict)
+      obs = self.convert_obs_to_np(obs)
+      
+      state_tensor = torch.FloatTensor(obs)
+      state_tensor = state_tensor.to(self.device).unsqueeze(0)
+      # Checking if the target is reachable
+      if q_func(state_tensor).item() <= 0:
+          print("Target Reachable!")
+          break
+      else:
+          # Informed Sampling
+          mean = np.array([x,y])
+          var = 1e-3  # Starting variance
+          lb = self.low[9:11]
+          ub = self.high[9:11]
+          while True:
+              sd = np.sqrt(var)
+              if sd==float('inf'):
+                  print("No goal can be reached, input a new initial state.")
+                  break
+              a, b = (lb - mean) / sd, (ub - mean) / sd
+              truncated_gaussian = truncnorm(a, b, loc=mean, scale=sd)
+              samples = truncated_gaussian.rvs(size=(100, mean.shape[0]))
+              found = False
+              for sample in samples:
+                  print(sample)
+                  state_dict['states'][10:12] = sample
+                  obs = self.suite_env.reset_to(state_dict)
+                  obs = self.convert_obs_to_np(obs)
+                  state_tensor = torch.FloatTensor(obs)
+                  state_tensor = state_tensor.to(self.device).unsqueeze(0)
+                  print(q_func(state_tensor).item())
+                  if q_func(state_tensor).item() <= 0:
+                      found = True
+                      break
+              if found:
+                  ans = input(f"New goal has been proposed at (x,y) = {state_dict['states'][10:12]}, accept (Y/N)? ")
+                  if ans == "Y":
+                      print("New goal accepted.")
+                      loop_continue = False
+                      break
+                  elif ans == "N":
+                      print("Restarting, please propose a new goal.")
+                      break
+              var *= 2
+    obs = self.suite_env.reset_to(state_dict)
+    states = []
+    video_count = 0
+    video_skip = 5
+    video_writer = imageio.get_writer(video_path, fps=20)
+    result = 0
+    for _ in range(self.timeout):
+        obs = self.convert_obs_to_np(obs)
+        state_tensor = torch.FloatTensor(obs)
+        state_tensor = state_tensor.to(self.device).unsqueeze(0)        
+        # step env
+        next_obs, _, done, _ = self.step()
+        obs = next_obs
+        states.append(next_obs)
+        # visualization
+        if self.render:
+          self.suite_env.render(mode="human", camera_name="frontview")
+        if video_writer is not None:
+          if video_count % video_skip == 0:
+              video_img = []
+              video_img.append(self.suite_env.render(mode="rgb_array", height=512, width=512, camera_name="frontview"))
+              video_img = np.concatenate(video_img, axis=1) # concatenate horizontally
+              video_writer.append_data(video_img)
+          video_count += 1
+        l_x = self.target_margin(self.state)
+        g_x = self.safety_margin(self.state)
+        # break if done or if success
+        if l_x <= 0:
+            result = 1 #Success
+            break
+        if done or g_x > 0:
+            result = -1 #Failed
+        # update for next iter
+    if result == 0:
+      result = -1
+    return states, result    
