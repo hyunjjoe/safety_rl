@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch
 from omegaconf import OmegaConf
-
+from RARL.utils import save_obj
 from RARL.DDQNPolicy import DDQNPolicy
 from RARL.config import dqnConfig
 from gym_reachability import gym_reachability  # Custom Gym env.
@@ -152,6 +152,8 @@ if args.showTime:
 
 outFolder = os.path.join(args.outFolder, 'ReachPolicy-DDQN', fn)
 print(outFolder)
+figureFolder = os.path.join(outFolder, 'figure')
+os.makedirs(figureFolder, exist_ok=True)
 
 CONFIG = dqnConfig(
     ENV_NAME=env_name,
@@ -220,7 +222,7 @@ def run_experiment(args, CONFIG, env):
   dimList = [s_dim] + args.architecture + [numAction]
   np.random.seed(args.randomSeed)
   agent = DDQNPolicy(CONFIG, numAction, actionList, dimList, cfg=cfg.environment, mode='RA')
-  _, trainProgress = agent.learn(
+  trainRecords, trainProgress = agent.learn(
       env,
       MAX_UPDATES=CONFIG.MAX_UPDATES,
       MAX_EP_STEPS=CONFIG.MAX_EP_STEPS,
@@ -242,6 +244,23 @@ def run_experiment(args, CONFIG, env):
       outFolder=outFolder,
       verbose=True
   )
+  trainDict = {}
+  trainDict['trainRecords'] = trainRecords
+  trainDict['trainProgress'] = trainProgress
+  filePath = os.path.join(outFolder, 'train')
+  # region: loss
+  fig, ax = plt.subplots(figsize=(8, 4))
+  data = trainRecords
+  ax.plot(data, 'b:')
+  ax.set_xlabel('Iteration (x 1e5)', fontsize=18)
+  ax.set_xticks(np.linspace(0, args.maxUpdates, 5))
+  ax.set_xticklabels(np.linspace(0, args.maxUpdates, 5) / 1e5)
+  ax.set_title('loss_critic', fontsize=18)
+  ax.set_xlim(left=0, right=args.maxUpdates)
+  fig.tight_layout()
+  figurePath = os.path.join(figureFolder, 'train_loss_success.png')
+  fig.savefig(figurePath)
+  save_obj(trainDict, filePath)
   return trainProgress
 
 # == VALDIATE VF ==
@@ -297,7 +316,6 @@ def run_ooa(path, config_path, env, video_path, doneType='toEnd'):
     for k in CONFIG_.__dict__:
       CONFIG.__dict__[k] = CONFIG_.__dict__[k]
     CONFIG.DEVICE = device
-    CONFIG.RENDER = True
   report_config(CONFIG)
 
   env.doneType = doneType
