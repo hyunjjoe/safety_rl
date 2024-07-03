@@ -384,13 +384,13 @@ class ReachPolicyEnv(gym.Env):
               samples = truncated_gaussian.rvs(size=(100, mean.shape[0]))
               found = False
               for sample in samples:
-                  print(sample)
+                  #print(sample)
                   state_dict['states'][10:12] = sample
                   obs = self.suite_env.reset_to(state_dict)
                   obs = self.convert_obs_to_np(obs)
                   state_tensor = torch.FloatTensor(obs)
                   state_tensor = state_tensor.to(self.device).unsqueeze(0)
-                  print(q_func(state_tensor).item())
+                  #print(q_func(state_tensor).item())
                   if q_func(state_tensor).item() <= 0:
                       found = True
                       break
