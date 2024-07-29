@@ -26,6 +26,11 @@ register(
 )
 
 register(
+    id="dubins_policy-v0",
+    entry_point="gym_reachability.gym_reachability.envs:DubinsPolicyEnv"
+)
+
+register(
     id="dubins_car_param-v0",
     entry_point="gym_reachability.gym_reachability.envs:DubinsCarParamEnv"
 )
@@ -43,6 +48,11 @@ register(
 register(
     id="reach_policy-v0",
     entry_point="gym_reachability.gym_reachability.envs:ReachPolicyEnv"
+)
+
+register(
+    id="lift_policy-v0",
+    entry_point="gym_reachability.gym_reachability.envs:LiftPolicyEnv"
 )
 
 register(

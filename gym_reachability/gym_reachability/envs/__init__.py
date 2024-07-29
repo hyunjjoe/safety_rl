@@ -26,3 +26,7 @@ from .dubins_car_pe import DubinsCarPEEnv
 from .point_mass import PointMassEnv
 
 from .zermelo_show import ZermeloShowEnv
+
+from .lift_policy import LiftPolicyEnv
+
+from .dubins_policy import DubinsPolicyEnv
