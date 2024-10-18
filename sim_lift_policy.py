@@ -65,7 +65,7 @@ parser.add_argument(
     "-ab", "--addBias", help="add bias term for RA", action="store_true"
 )
 parser.add_argument(
-    "-mu", "--maxUpdates", help="maximal #gradient updates", default=5e6,
+    "-mu", "--maxUpdates", help="maximal #gradient updates", default=400000,
     type=int
 )
 parser.add_argument(
@@ -76,7 +76,7 @@ parser.add_argument(
     "-mc", "--memoryCapacity", help="memoryCapacity", default=150000, type=int
 )
 parser.add_argument(
-    "-cp", "--checkPeriod", help="check the success ratio", default=500000,
+    "-cp", "--checkPeriod", help="check the success ratio", default=50000,
     type=int
 )
 parser.add_argument(
@@ -85,7 +85,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "-upg", "--update_period_gamma", help="update period for gamma scheduler",
-    default=500000, type=int
+    default=50000, type=int
 )
 parser.add_argument(
     "-upl", "--update_period_lr", help="update period for lr cheduler",
@@ -174,7 +174,7 @@ CONFIG = dqnConfig(
     LR_C_DECAY=0.8,  # Learning rate decay rate.
     # =================== LEARNING RATE .
     GAMMA=args.gamma,  # Inital gamma.
-    GAMMA_END=0.999999,  # Final gamma.
+    GAMMA_END=0.9999,  # Final gamma.
     GAMMA_PERIOD=args.update_period_gamma,  # How often to update gamma.
     GAMMA_DECAY=0.1,  # Rate of decay of gamma.
     # ===================
@@ -203,7 +203,7 @@ cfg = OmegaConf.load(args.config_file)
 
 # == ENVIRONMENT ==
 env = gym.make(
-    env_name, device=device, cfg_env=cfg.environment, mode="RA", doneType='toEnd', render=args.render
+    env_name, device=device, cfg_env=cfg.environment, mode=args.mode, doneType='toEnd', render=args.render
 )
 
 # == EXPERIMENT ==
@@ -221,7 +221,7 @@ def run_experiment(args, CONFIG, env):
   actionList = np.arange(numAction)
   dimList = [s_dim] + args.architecture + [numAction]
   np.random.seed(args.randomSeed)
-  agent = DDQNPolicy(CONFIG, numAction, actionList, dimList, cfg=cfg.environment, mode='RA')
+  agent = DDQNPolicy(CONFIG, numAction, actionList, dimList, cfg=cfg.environment, mode=args.mode)
   trainRecords, trainProgress = agent.learn(
       env,
       MAX_UPDATES=CONFIG.MAX_UPDATES,
@@ -289,10 +289,10 @@ def test_experiment(path, config_path, env, doneType='toEnd'):
 
   dimList = [s_dim] + CONFIG.ARCHITECTURE + [numAction]
   agent = DDQNPolicy(
-      CONFIG, numAction, actionList, dimList, cfg=cfg.environment, mode='RA'
+      CONFIG, numAction, actionList, dimList, cfg=cfg.environment, mode=args.mode
   )
   agent.restore(path)
-  confusion = env.confusion_matrix(q_func=agent.Q_network, num_states=100)
+  confusion = env.confusion_matrix(q_func=agent.Q_network, num_states=1000)
   print("True Positive", confusion[0, 0])
   print("True Negative", confusion[1, 1])
   print("False Positive", confusion[0, 1])
@@ -327,6 +327,16 @@ def run_ooa(path, config_path, env, video_path, doneType='toEnd'):
   )
   agent.restore(path)
   env.ooa(q_func=agent.Q_network, video_path=video_path)
+#   alignment_data = env.ooa_test(q_func=agent.Q_network)
+#   directory = "alignment_data"
+#   filename = "lift.npy"
+
+#   # Create the directory if it doesn't exist
+#   if not os.path.exists(directory):
+#      os.makedirs(directory)
+
+#   # Save the numpy array to the specified file
+#   np.save(os.path.join(directory, filename), alignment_data)
 
 if args.test:
     test_experiment(args.path, args.config_path, env)

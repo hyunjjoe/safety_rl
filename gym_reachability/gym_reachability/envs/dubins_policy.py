@@ -10,18 +10,23 @@ from .env_utils import plot_arc, plot_circle
 from .env_utils import calculate_margin_circle, calculate_margin_rect, calculate_margin_circle_param
 from mlp import gcMLP
 from scipy.integrate import solve_ivp
+import os
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from copy import deepcopy
+from scipy.stats import truncnorm
 
 class DubinsPolicyEnv(gym.Env):
   """A gym environment considering Dubins car dynamics.
   """
 
   def __init__(
-      self, device, mode="RA", doneType="toEnd", sample_inside_obs=True,
+      self, device, mode="RA", doneType="toEnd", sample_inside_obs=False,
       sample_inside_tar=True
   ):
     """Initializes the environment with given arguments.
 
-    Args:d
+    Args:ds
         device (str): device type (used in PyTorch).
         mode (str, optional): reinforcement learning type. Defaults to "RA".
         doneType (str, optional): the condition to raise `done flag in
@@ -87,8 +92,6 @@ class DubinsPolicyEnv(gym.Env):
     ]
 
     # Cost Params
-    self.targetScaling = 1.
-    self.safetyScaling = 1.
     self.penalty = 1.0
     self.reward = -1.0
     self.costType = "sparse"
@@ -216,6 +219,53 @@ class DubinsPolicyEnv(gym.Env):
       it.iternext()
     return v
 
+  def get_comp_value(self, q_func, nx=100, ny=100, nt=50, nparam=20, addBias=False):
+      """
+      Gets the state values given the Q-network. We fix the heading angle of the
+      car to `theta`.
+
+      Args:
+          q_func (object): agent's Q-network.
+          theta (float): the heading angle of the car.
+          nx (int, optional): # points in x-axis. Defaults to 101.
+          ny (int, optional): # points in y-axis. Defaults to 101.
+          addBias (bool, optional): adding bias to the values or not.
+              Defaults to False.
+
+      Returns:
+          np.ndarray: values
+      """
+
+      #50 50 50 20
+      v = np.zeros((nx, ny, nt, nparam))
+      it = np.nditer(v, flags=["multi_index"])
+      xs = np.linspace(self.bounds[0, 0], self.bounds[0, 1], nx)
+      ys = np.linspace(self.bounds[1, 0], self.bounds[1, 1], ny)
+      ts = np.linspace(self.bounds[2, 0], self.bounds[2, 1], nt)
+      ps = np.linspace(self.bounds[3, 0], self.bounds[3, 1], nparam)
+      while not it.finished:
+        idx = it.multi_index
+        x = xs[idx[0]]
+        y = ys[idx[1]]
+        th = ts[idx[2]]
+        param = ps[idx[3]]
+        l_x = self.target_margin(np.array([x, y, th, param]))
+        g_x = self.safety_margin(np.array([x, y]))
+
+        if self.mode == "normal" or self.mode == "RA":
+          state = (torch.FloatTensor([x, y, th, param]).to(self.device).unsqueeze(0))
+        else:
+          z = max([l_x, g_x])
+          state = (
+              torch.FloatTensor([x, y, th, z]).to(self.device).unsqueeze(0)
+          )
+        if addBias:
+          v[idx] = q_func(state).min(dim=1)[0].item() + max(l_x, g_x)
+        else:
+          v[idx] = q_func(state).min(dim=1)[0].item()
+        it.iternext()
+      return v
+
   def sample_random_state(
       self, sample_inside_obs=False, sample_inside_tar=True, theta=None
   ):
@@ -232,6 +282,7 @@ class DubinsPolicyEnv(gym.Env):
     Returns:
         np.ndarray: the sampled initial state.
     """
+    np.random.seed(None)
     # random sample `theta`
     if theta is None:
       theta_rnd = 2.0 * np.random.uniform() * np.pi
@@ -287,7 +338,14 @@ class DubinsPolicyEnv(gym.Env):
     # cost
     if self.mode == "RA":
       if fail:
-        cost = self.penalty
+        cost = self.penalty * self.scaling
+      elif success:
+        cost = self.reward
+      else:
+        cost = 0.0
+    else:
+      if fail:
+        cost = self.penalty * self.scaling
       elif success:
         cost = self.reward
       else:
@@ -306,7 +364,7 @@ class DubinsPolicyEnv(gym.Env):
     if done and self.doneType == "fail":
       info = {"g_x": self.penalty * self.scaling, "l_x": l_x}
     else:
-      info = {"g_x": g_x, "l_x": l_x}
+      info = {"g_x": g_x * self.scaling, "l_x": l_x}
 
     return np.copy(self.state), cost, done, info
 
@@ -439,7 +497,7 @@ class DubinsPolicyEnv(gym.Env):
       target_margin = calculate_margin_circle_param(
           s, [self.x_center, self.target_radius], negativeInside=True
       )
-      return self.targetScaling * target_margin
+      return target_margin
     else:
       return None
 
@@ -502,6 +560,17 @@ class DubinsPolicyEnv(gym.Env):
           sample_inside_tar=sample_inside_tar,
           theta=theta,
       )
+    # while True:
+    #   state = self.sample_random_state(
+    #       sample_inside_obs=sample_inside_obs,
+    #       sample_inside_tar=sample_inside_tar,
+    #       theta=theta,
+    #   )
+    #   state_tensor = (torch.FloatTensor(state).to(self.device).unsqueeze(0))
+    #   initial_q = q_func(state_tensor).item()
+    #   if(abs(initial_q) < 0.1):
+    #     print(initial_q)
+    #     break
     traj = []
     result = 0  # not finished
     valueList = []
@@ -807,6 +876,8 @@ class DubinsPolicyEnv(gym.Env):
             ticks=[vmin, 0, vmax],
         )
         cbar.ax.set_yticklabels(labels=[vmin, 0, vmax], fontsize=16)
+    ax.set_xlim(self.bounds[0, 0], self.bounds[0, 1])
+    ax.set_ylim(self.bounds[1, 0], self.bounds[1, 1])
 
   def plot_trajectories(
       self, q_func, T=250, num_rnd_traj=None, states=None, theta=None, param = None,
@@ -889,6 +960,133 @@ class DubinsPolicyEnv(gym.Env):
         lw=lw,
         zorder=zorder,
     )
+  
+  def plot_reach_avoid_set(self, q_func, nx=101, ny=101, theta=0, param=1.5):
+      obstacles = [
+          [-0.5, 0.5, 0.5, 5],     # Obstacle 1
+          [-0.5, 0.5, -5, -0.5],   # Obstacle 2
+          [-5, 5, -5, -4.5],       # Obstacle 3
+          [-5, 5, 4.5, 5],         # Obstacle 4
+          [-5, -4.5, -5, 5],       # Obstacle 5
+          [4.5, 5, -5, 5]          # Obstacle 6
+      ]
+      fig, ax = plt.subplots(figsize=(10, 10))
+
+      # Plot the goals
+      goali_circle = patches.Ellipse(np.array([3, param]), width=1, height=1, color='#C8A2C8', fill=False, linewidth=2)
+      ax.add_patch(goali_circle)
+
+      axStyle = self.get_axes()
+      x = np.linspace(axStyle[0][0], axStyle[0][1], nx)
+      y = np.linspace(axStyle[0][2], axStyle[0][3], ny)
+      X, Y = np.meshgrid(x, y)
+      v = self.get_value(q_func, theta, param, nx, ny)
+
+      # Plot the zero-level contour with a lower z-order
+      ax.contour(X, Y, v.T, levels=[0], colors='#C8A2C8', linewidths=2, zorder=1)
+
+      # Plot the obstacles with a higher z-order
+      for bounds in obstacles:
+          rect = patches.Rectangle((bounds[0], bounds[2]),
+                                  bounds[1] - bounds[0],
+                                  bounds[3] - bounds[2],
+                                  linewidth=1, edgecolor='black', facecolor='black', zorder=2)
+          ax.add_patch(rect)
+
+      # Additional plot settings
+      ax.set_xticks([])
+      ax.set_yticks([])
+      ax.set_aspect('equal')
+      ax.set_xlim(self.bounds[0, 0], self.bounds[0, 1])
+      ax.set_ylim(self.bounds[1, 0], self.bounds[1, 1])
+
+      plt.tight_layout()
+      plt.subplots_adjust(wspace=0.025)
+
+      # Save the plot
+      dir = 'plots'
+      if not os.path.exists(dir):
+          os.makedirs(dir)
+      fig.savefig(os.path.join(dir, 'ra_set.png'), bbox_inches='tight')
+      plt.show()
+
+  def plot_v_values_paper(
+    self, q_func, theta=0, param=2, vmin=-1, vmax=1,
+    nx=201, ny=201, cmap="seismic", addBias=False
+):
+    """Plots state values.
+
+    Args:
+        q_func (object): agent's Q-network.
+        theta (float, optional): if provided, fix the car's heading angle
+            to its value. Defaults to np.pi/2.
+        vmin (int, optional): vmin in colormap. Defaults to -1.
+        vmax (int, optional): vmax in colormap. Defaults to 1.
+        nx (int, optional): # points in x-axis. Defaults to 201.
+        ny (int, optional): # points in y-axis. Defaults to 201.
+        cmap (str, optional): color map. Defaults to 'seismic'.
+        addBias (bool, optional): adding bias to the values or not.
+            Defaults to False.
+    """
+    obstacles = [
+        [-0.5, 0.5, 0.5, 5],     # Obstacle 1
+        [-0.5, 0.5, -5, -0.5],   # Obstacle 2
+        [-5, 5, -5, -4.5],       # Obstacle 3
+        [-5, 5, 4.5, 5],         # Obstacle 4
+        [-5, -4.5, -5, 5],       # Obstacle 5
+        [4.5, 5, -5, 5]          # Obstacle 6
+    ]
+    fig, ax = plt.subplots(figsize=(10, 10))
+    axStyle = self.get_axes()
+    goali_circle = patches.Ellipse(np.array([3, param]), width=1, height=1, color='red', fill=True, linewidth=2)
+    ax.add_patch(goali_circle)
+    # == Plot V ==
+    if theta is None:
+        theta = np.random.uniform(0, 2 * np.pi)
+    v = self.get_value(q_func, theta, param, nx, ny, addBias=addBias)
+    im = ax.imshow(
+        v.T,
+        interpolation="none",
+        extent=axStyle[0],
+        origin="lower",
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        zorder=-1,
+    )
+    cbar = fig.colorbar(
+        im,
+        ax=ax,
+        pad=0.01,
+        fraction=0.05,
+        shrink=0.95,
+        ticks=[vmin, 0, vmax],
+    )
+    cbar.ax.set_yticklabels(labels=[vmin, 0, vmax], fontsize=16)
+    # Plot the obstacles with a higher z-order
+    for bounds in obstacles:
+        rect = patches.Rectangle((bounds[0], bounds[2]),
+                                 bounds[1] - bounds[0],
+                                 bounds[3] - bounds[2],
+                                 linewidth=1, edgecolor='black', facecolor='black', zorder=2)
+        ax.add_patch(rect)
+
+    # Additional plot settings
+    ax.set_aspect('equal')
+    ax.set_xlim(self.bounds[0, 0], self.bounds[0, 1])
+    ax.set_ylim(self.bounds[1, 0], self.bounds[1, 1])
+    
+    # Completely turn off the axes
+    ax.axis('off')
+
+    # Save the plot
+    dir = 'plots'
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    fig.savefig(os.path.join(dir, 'val_set.png'), bbox_inches='tight')
+    plt.show()
+
+
   def get_axes(self):
     """Gets the axes bounds and aspect_ratio.
 
@@ -945,9 +1143,52 @@ class DubinsPolicyEnv(gym.Env):
     Returns:
         np.ndarray: confusion matrix.
     """
+    # nx = 50
+    # ny = 50
+    # nth = 20
+    # nparam = 20
+    # num_states = nx*ny*nth*nparam
+    # xs = np.linspace(self.bounds[0, 0], self.bounds[0, 1], nx)
+    # ys = np.linspace(self.bounds[1, 0], self.bounds[1, 1], ny)
+    # ths = np.linspace(self.bounds[2, 0], self.bounds[2, 1], ny)
+    # params = np.linspace(self.bounds[3, 0], self.bounds[3, 1], nparam)
+    # results = np.empty((nx, ny, nth, nparam), dtype=int)
+    # minVs = np.empty((nx, ny, nth, nparam), dtype=float)
+    # it = np.nditer(results, flags=["multi_index"])
+    # print()
+    # confusion_matrix = np.array([[0.0, 0.0], [0.0, 0.0]])
+    # while not it.finished:
+    #   idx = it.multi_index
+    #   print(idx, end="\r")
+    #   x = xs[idx[0]]
+    #   y = ys[idx[1]]
+    #   th = ths[idx[2]]
+    #   param = params[idx[3]]
+    #   state = np.array([x, y, th, param])
+    #   _, result, initial_q = self.simulate_one_trajectory(
+    #       q_func, state=state, init_q=True
+    #   )
+    #   assert (result == 1) or (result == -1)
+    #   # note that signs are inverted
+    #   if -int(np.sign(initial_q)) == np.sign(result):
+    #     if np.sign(result) == 1:
+    #       # True Positive. (reaches and it predicts so)
+    #       confusion_matrix[0, 0] += 1.0
+    #     elif np.sign(result) == -1:
+    #       # True Negative. (collides and it predicts so)
+    #       confusion_matrix[1, 1] += 1.0
+    #   else:
+    #     if np.sign(result) == 1:
+    #       # False Positive.(reaches target, predicts it will collide)
+    #       confusion_matrix[0, 1] += 1.0
+    #     elif np.sign(result) == -1:
+    #       # False Negative.(collides, predicts it will reach target)
+    #       confusion_matrix[1, 0] += 1.0
+    #   it.iternext()
+    # return confusion_matrix / num_states
+
     confusion_matrix = np.array([[0.0, 0.0], [0.0, 0.0]])
     for ii in range(num_states):
-      #print(ii)
       _, result, initial_q = self.simulate_one_trajectory(
           q_func, init_q=True
       )
@@ -969,3 +1210,189 @@ class DubinsPolicyEnv(gym.Env):
           confusion_matrix[1, 0] += 1.0
     return confusion_matrix / num_states
   
+  def ooa(self, q_func):
+    obstacles = [
+      [-0.5, 0.5, 0.5, 5],     # Obstacle 1
+      [-0.5, 0.5, -5, -0.5],   # Obstacle 2
+      [-5, 5, -5, -4.5],       # Obstacle 3
+      [-5, 5, 4.5, 5],         # Obstacle 4
+      [-5, -4.5, -5, 5],       # Obstacle 5
+      [4.5, 5, -5, 5]          # Obstacle 6
+    ]
+
+    loop_continue = True  # Control flag for the outer loop
+    state = np.array([-2,-4.2,0,3])
+    goal_input = None
+    while loop_continue:
+        g_y = float(input("Enter goal y_pos: "))
+        goal_input = g_y
+        state = np.array(state)
+        state[-1] = g_y
+        # Checking if the target is reachable
+        state_tensor = (torch.FloatTensor(state).to(self.device).unsqueeze(0))
+        initial_q = q_func(state_tensor).item()
+        if initial_q <= 0:
+            print("Target Reachable!")
+            break
+        else:
+            # Informed Sampling
+            mean = g_y
+            var = 0.1  # Starting variance
+            lb = self.bounds[3,0]
+            ub = self.bounds[3,1]
+            while True:
+                sd = np.sqrt(var)
+                if sd==math.inf:
+                    print("No goal can be reached, input a new initial state.")
+                    break
+                a, b = (lb - mean) / sd, (ub - mean) / sd
+                truncated_gaussian = truncnorm(a, b, loc=mean, scale=sd)
+                samples = truncated_gaussian.rvs(100)
+                found = False
+                for sample in samples:
+                    state[-1] = sample
+                    state_tensor = (torch.FloatTensor(state).to(self.device).unsqueeze(0))
+                    initial_q = q_func(state_tensor).item()
+                    if initial_q <= 0:
+                        g_y = sample
+                        found = True
+                        break
+                if found:
+                    ans = input(f"New goal has been proposed at g_y = {g_y}, accept (Y/N)? ")
+                    if ans == "Y":
+                        print("New goal accepted.")
+                        state[-1] = g_y
+                        loop_continue = False
+                        break
+                    elif ans == "N":
+                        print("Restarting, please propose a new goal.")
+                        break
+                var *= 2
+
+    state[-1] = g_y
+    traj, result, _, _ = self.simulate_one_trajectory(state=state,q_func=q_func)
+    state_input = deepcopy(state)
+    state_input[-1] = goal_input
+    traj_input, _, _, _ = self.simulate_one_trajectory(state=state_input,q_func=q_func)
+    # Visualize trajectory and corresponding BRAT
+    # Visualize trajectory and corresponding BRAT in one plot
+    fig, ax = plt.subplots(figsize=(10, 10))
+
+    # Plot environment
+    for bounds in obstacles:
+        rect = patches.Rectangle((bounds[0], bounds[2]),
+                                bounds[1] - bounds[0],
+                                bounds[3] - bounds[2],
+                                linewidth=1, edgecolor='black', facecolor='black')
+        ax.add_patch(rect)
+
+    # Plot the goals
+    goali_circle = patches.Ellipse(np.array([3, goal_input]), width=1, height=1, color='red', fill=True, linewidth=2)
+    goal1_circle = patches.Ellipse(np.array([3, state[-1]]), width=1, height=1, color='green', fill=True, linewidth=2)
+    ax.add_patch(goal1_circle)
+    ax.add_patch(goali_circle)
+
+    # Plot arrows for trajectories
+    arrow_start_idx1 = int(0.9 * len(traj))  # Start the arrow at 90% of the trajectory length
+    arrow_end_idx1 = len(traj) - 1  # End the arrow at the last point
+    dx1 = traj[arrow_end_idx1, 0] - traj[arrow_start_idx1, 0]
+    dy1 = traj[arrow_end_idx1, 1] - traj[arrow_start_idx1, 1]
+    arrow1 = patches.FancyArrowPatch((traj[arrow_start_idx1, 0], traj[arrow_start_idx1, 1]),
+                                    (traj[arrow_start_idx1, 0] + dx1 * 0.1, traj[arrow_start_idx1, 1] + dy1 * 0.1),
+                                    arrowstyle='->', color='green', mutation_scale=40, linewidth=3)
+    ax.add_patch(arrow1)
+
+    arrow_start_idx2 = int(0.4 * len(traj_input))  # Start the arrow at 40% of the trajectory length
+    arrow_end_idx2 = len(traj_input) - 1  # End the arrow at the last point
+    dx2 = traj_input[arrow_end_idx2, 0] - traj_input[arrow_start_idx2, 0]
+    dy2 = traj_input[arrow_end_idx2, 1] - traj_input[arrow_start_idx2, 1]
+    arrow2 = patches.FancyArrowPatch((traj_input[arrow_start_idx2, 0], traj_input[arrow_start_idx2, 1]),
+                                    (traj_input[arrow_start_idx2, 0] + dx2 * 0.1, traj_input[arrow_start_idx2, 1] + dy2 * 0.1),
+                                    arrowstyle='->', color='red', mutation_scale=40, linewidth=3)
+    ax.add_patch(arrow2)
+
+    # Plot trajectories
+    ax.plot(traj[:, 0], traj[:, 1], linewidth=3, color='green')
+    ax.plot(traj_input[:, 0], traj_input[:, 1], linewidth=3, color='red')
+
+    # Additional plot settings
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_aspect('equal')
+    ax.set_xlim(self.bounds[0, 0], self.bounds[0, 1])
+    ax.set_ylim(self.bounds[1, 0], self.bounds[1, 1])
+
+    plt.tight_layout()
+    plt.subplots_adjust(wspace=0.025)
+
+    # Save the plot
+    dir = 'plots'
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    fig.savefig(os.path.join(dir, 'OOA_rollout.png'), bbox_inches='tight')
+
+
+  def ooa_test(self, q_func, ic=1000):
+    obstacles = [
+      [-0.5, 0.5, 0.5, 5],     # Obstacle 1
+      [-0.5, 0.5, -5, -0.5],   # Obstacle 2
+      [-5, 5, -5, -4.5],       # Obstacle 3
+      [-5, 5, 4.5, 5],         # Obstacle 4
+      [-5, -4.5, -5, 5],       # Obstacle 5
+      [4.5, 5, -5, 5]          # Obstacle 6
+    ]
+    result = np.zeros((3,ic))
+    #Change this when also changing g_y
+    g_orig = np.array([-3,0,3])
+    for k in range(g_orig.size):
+      for i in range(ic):
+        print(i)
+        loop_continue = True  # Control flag for the outer loop
+        state = self.sample_random_state(
+            sample_inside_obs=False,
+            sample_inside_tar=False,
+            theta=None,
+        )
+        while loop_continue:
+            g_y = g_orig[k]
+            state = np.array(state)
+            state[-1] = g_y
+            # Checking if the target is reachable
+            state_tensor = (torch.FloatTensor(state).to(self.device).unsqueeze(0))
+            initial_q = q_func(state_tensor).item()
+            if initial_q <= 0:
+                break
+            else:
+                # Informed Sampling
+                mean = g_y
+                var = 0.1  # Starting variance
+                lb = self.bounds[3,0]
+                ub = self.bounds[3,1]
+                while True:
+                    sd = np.sqrt(var)
+                    if sd>1e15:
+                        print("No goal found")
+                        result[k,i] = -1
+                        loop_continue = False
+                        break
+                    a, b = (lb - mean) / sd, (ub - mean) / sd
+                    truncated_gaussian = truncnorm(a, b, loc=mean, scale=sd)
+                    samples = truncated_gaussian.rvs(100)
+                    #print(samples)
+                    #print(var)
+                    found = False
+                    for sample in samples:
+                        state[-1] = sample
+                        state_tensor = (torch.FloatTensor(state).to(self.device).unsqueeze(0))
+                        initial_q = q_func(state_tensor).item()
+                        #print(initial_q)
+                        if initial_q <= 0:
+                            g_y = sample
+                            found = True
+                            break
+                    if found:
+                        result[k,i] = abs(g_y-g_orig[k])
+                        loop_continue=False
+                        break
+                    var *= 2
+    return result

@@ -147,6 +147,8 @@ class LiftPolicyEnv(gym.Env):
       g1 = np.sqrt(s[16]**2 + s[17]**2 + s[18]**2) - 0.12
       g2 = -1*(s[7])+0.003
       safety_margin = min(g1, g2)
+      #g3 = 0.79 - s[2]
+      #safety_margin = max(g3,safety_margin)
       return safety_margin
 
   def target_margin(self, s):
@@ -166,7 +168,7 @@ class LiftPolicyEnv(gym.Env):
         return self.state
     
   def render_sim(self):
-        self.suite_env.render(camera_name="frontview")
+        self.suite_env.render(camera_name="agentview")
 
   def reset(self):
         obs = self._reset_suite()
@@ -217,11 +219,20 @@ class LiftPolicyEnv(gym.Env):
         cost = self.reward
       else:
         cost = 0.0
+    else:
+      if fail:
+        cost = self.penalty
+      elif success:
+        cost = self.reward
+      else:
+        cost = 0
 
     # done
     if self.doneType == 'toEnd':
       done = not self.check_within_bounds(self.state)
-
+    elif self.doneType == 'toFailureOrSuccess':
+      if success or fail:
+        done = True
     # = `info`
     if self.doneType == "fail":
       info = {"g_x": self.penalty * self.scaling}
@@ -232,6 +243,18 @@ class LiftPolicyEnv(gym.Env):
   def simulate_one_trajectory(self, q_func, T=500, init_q=False, toEnd=False):
     start_time = time.time()
     self.policy.start_episode()
+    # np.random.seed(None)
+    # while True:
+    #   obs = self.suite_env.reset()
+    #   state_dict = self.suite_env.get_state()
+    #   obs = self.suite_env.reset_to(state_dict)
+    #   obsc = self.convert_obs_to_np(obs)
+    #   state_tensor = torch.FloatTensor(obsc)
+    #   state_tensor = state_tensor.to(self.device).unsqueeze(0)        
+    #   initial_q = q_func(state_tensor).item()
+    #   if(abs(initial_q) < 0.1):
+    #     print(initial_q)
+    #     break
     obs = self.suite_env.reset()
     state_dict = self.suite_env.get_state()
     obs = self.suite_env.reset_to(state_dict)
@@ -252,7 +275,7 @@ class LiftPolicyEnv(gym.Env):
         states.append(next_obs)
         # visualization
         if self.render:
-            self.suite_env.render(mode="human", camera_name="frontview")
+            self.suite_env.render(mode="human", camera_name="agentview")
         l_x = self.target_margin(self.state)
         g_x = self.safety_margin(self.state)
         # break if done or if success
@@ -426,11 +449,11 @@ class LiftPolicyEnv(gym.Env):
         states.append(next_obs)
         # visualization
         if self.render:
-          self.suite_env.render(mode="human", camera_name="frontview")
+          self.suite_env.render(mode="human", camera_name="agentview")
         if video_writer is not None:
           if video_count % video_skip == 0:
               video_img = []
-              video_img.append(self.suite_env.render(mode="rgb_array", height=512, width=512, camera_name="frontview"))
+              video_img.append(self.suite_env.render(mode="rgb_array", height=512, width=512, camera_name="agentview"))
               video_img = np.concatenate(video_img, axis=1) # concatenate horizontally
               video_writer.append_data(video_img)
           video_count += 1
@@ -446,3 +469,62 @@ class LiftPolicyEnv(gym.Env):
     if result == 0:
       result = -1
     return states, result    
+  
+
+  def ooa_test(self, q_func, ic=1000):
+    np.random.seed(None)
+    name_to_id = {'Red Bowl': 0, 'Brown Bowl': 1, 'Mug':2}
+    name_to_id = {'Brown Bowl': 1}
+    result = np.zeros((3,ic))
+    #Red bowl = 0, Brown Bowl = 1, and Mug = 2, Both (not proposed obj) = 3, None = -1
+    for key_orig, k in name_to_id.items():
+       for i in range(ic):
+        print(i)
+        self.policy.start_episode()
+        obs = self.suite_env.reset()
+        state_dict = self.suite_env.get_state()
+        #Initial starting State
+        obs = self.suite_env.reset_to(state_dict)
+        while True:
+          if obs['object'][-1]==name_to_id[key_orig]:
+            break
+          else:
+            # Call self.suite_env.reset_to until you get the right object id
+            obs = self.suite_env.reset_to(state_dict)
+        loop_continue = True
+        while loop_continue:
+          #Convert to VF friendly form
+          obs = self.convert_obs_to_np(obs)
+          state_tensor = torch.FloatTensor(obs)
+          state_tensor = state_tensor.to(self.device).unsqueeze(0)
+          # Checking if the target is reachable
+          if q_func(state_tensor).item() <= 0:
+              result[k,i]=name_to_id[key_orig]
+              print("Original works")
+              break
+          else:
+              print("Finding Alternative")
+              # Try for every single object
+              keys_not_user_input = [key for key in name_to_id if key != key_orig]
+              valid_keys = []
+              for key in keys_not_user_input:
+                #Reset until key is fully mapped
+                while True:
+                  if obs[-1]==name_to_id[key]:
+                    break
+                  else:
+                    obs = self.suite_env.reset_to(state_dict)
+                    obs = self.convert_obs_to_np(obs)
+                state_tensor = torch.FloatTensor(obs)
+                state_tensor = state_tensor.to(self.device).unsqueeze(0)
+                if q_func(state_tensor).item() <= 0:
+                  valid_keys.append(key)
+              if len(valid_keys)==0:
+                 result[k,i]=-1
+              elif len(valid_keys)==1:
+                 result[k,i]=name_to_id[valid_keys[0]]
+              elif len(valid_keys)==2:
+                 result[k,i]=3
+              loop_continue = False
+        print(result[k,i])          
+    return result

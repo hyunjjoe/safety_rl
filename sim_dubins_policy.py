@@ -26,6 +26,9 @@ parser.add_argument(
     type=str
 )
 parser.add_argument(
+    "-ooa", "--opt_alts", help="opts", action="store_true"
+)
+parser.add_argument(
     "-p", "--path", help="path to model", default='toEnd', type=str
 )
 parser.add_argument(
@@ -55,14 +58,14 @@ parser.add_argument(
     "-wi", "--warmupIter", help="warmup iteration", default=10000, type=int
 )
 parser.add_argument(
-    "-mu", "--maxUpdates", help="maximal #gradient updates", default=4000000,
+    "-mu", "--maxUpdates", help="maximal #gradient updates", default=400000,
     type=int
 )
 parser.add_argument(
     "-ut", "--updateTimes", help="#hyper-param. steps", default=20, type=int
 )
 parser.add_argument(
-    "-mc", "--memoryCapacity", help="memoryCapacity", default=5e4, type=int
+    "-mc", "--memoryCapacity", help="memoryCapacity", default=500000, type=int
 )
 parser.add_argument(
     "-cp", "--checkPeriod", help="check period", default=50000, type=int
@@ -123,7 +126,7 @@ fn = args.name + '-' + args.doneType
 if args.showTime:
   fn = fn + '-' + timestr
 
-outFolder = os.path.join(args.outFolder, 'dubins_policy-DDQN-bias', fn)
+outFolder = os.path.join(args.outFolder, 'dubins_policy-DDQN', fn)
 print(outFolder)
 figureFolder = os.path.join(outFolder, 'figure')
 os.makedirs(figureFolder, exist_ok=True)
@@ -243,7 +246,7 @@ if args.plotFigure or args.storeFigure:
 # == Agent CONFIG ==
 print("\n== Agent Information ==")
 if args.annealing:
-  GAMMA_END = 0.9999999
+  GAMMA_END = 0.9999
   EPS_PERIOD = int(updatePeriod / 10)
   EPS_RESET_PERIOD = updatePeriod
 else:
@@ -253,13 +256,19 @@ else:
 
 CONFIG = dqnConfig(
     DEVICE=device, ENV_NAME=env_name, SEED=args.randomSeed,
-    MAX_UPDATES=maxUpdates, MAX_EP_STEPS=maxSteps, BATCH_SIZE=64,
+    MAX_UPDATES=maxUpdates, MAX_EP_STEPS=maxSteps, BATCH_SIZE=1000,
     MEMORY_CAPACITY=args.memoryCapacity, ARCHITECTURE=args.architecture,
     ACTIVATION=args.actType, GAMMA=args.gamma, GAMMA_PERIOD=updatePeriod,
     GAMMA_END=GAMMA_END, EPS_PERIOD=EPS_PERIOD, EPS_DECAY=0.7,
     EPS_RESET_PERIOD=EPS_RESET_PERIOD, LR_C=args.learningRate,
     LR_C_PERIOD=updatePeriod, LR_C_DECAY=0.8, MAX_MODEL=50
 )
+
+# == REPORT ==
+def report_config(CONFIG):
+  for key, value in CONFIG.__dict__.items():
+    if key[:1] != '_':
+      print(key, value)
 
 def run_experiment(args, CONFIG, env):
     # == AGENT ==
@@ -303,7 +312,7 @@ def run_experiment(args, CONFIG, env):
         env, MAX_UPDATES=maxUpdates, MAX_EP_STEPS=maxSteps, warmupQ=False,
         doneTerminate=True, vmin=vmin, vmax=vmax, showBool=True,
         checkPeriod=args.checkPeriod, outFolder=outFolder,
-        plotFigure=args.plotFigure, storeFigure=args.storeFigure, addBias=True
+        plotFigure=args.plotFigure, storeFigure=args.storeFigure, addBias=False
     )
 
     trainDict = {}
@@ -433,7 +442,42 @@ def run_experiment(args, CONFIG, env):
     save_obj(trainDict, filePath)
 
 # == VALDIATE VF ==
-def test_experiment(path, config_path, env, doneType='toEnd'):
+def test_experiment(path, config_path, env, doneType='toEnd', mode="RA"):
+  """Plot the value function slices.
+
+  Args:
+      path (string): path to the model file *.pth.
+      config_path (string): path to the CONFIG.pkl file of the experiment.
+      env (gym.Env): environment used for training.
+      doneType (string, optional): termination type for episodes.
+  """
+  s_dim = env.observation_space.shape[0]
+  numAction = env.action_space.n
+  actionList = np.arange(numAction)
+
+  if os.path.isfile(config_path):
+    CONFIG_ = pickle.load(open(config_path, 'rb'))
+    for k in CONFIG_.__dict__:
+      CONFIG.__dict__[k] = CONFIG_.__dict__[k]
+    CONFIG.DEVICE = device
+  report_config(CONFIG)
+
+  env.doneType = doneType
+
+  dimList = [s_dim] + CONFIG.ARCHITECTURE + [numAction]
+  agent = DDQNSingle(
+      CONFIG, numAction, actionList, dimList, mode=mode
+  )
+  agent.restore(path)
+  confusion = env.confusion_matrix(q_func=agent.Q_network, num_states=1000)
+  #comp_values = env.get_comp_value(q_func=agent.Q_network)
+  #np.save("dubins_policy/rarl_values", comp_values)
+  print("True Positive", confusion[0, 0])
+  print("True Negative", confusion[1, 1])
+  print("False Positive", confusion[0, 1])
+  print("False Negative", confusion[1, 0])
+
+def run_ooa(path, config_path, env, doneType='toEnd'):
   """Plot the value function slices.
 
   Args:
@@ -459,15 +503,12 @@ def test_experiment(path, config_path, env, doneType='toEnd'):
       CONFIG, numAction, actionList, dimList, mode='RA'
   )
   agent.restore(path)
-  confusion = env.confusion_matrix(q_func=agent.Q_network, num_states=1000)
-  print("True Positive", confusion[0, 0])
-  print("True Negative", confusion[1, 1])
-  print("False Positive", confusion[0, 1])
-  print("False Negative", confusion[1, 0])
+  #env.ooa(q_func=agent.Q_network)
+  env.plot_v_values_paper(q_func=agent.Q_network,param=2)
 
 if args.test:
-    test_experiment(args.path, args.config_path, env)
-# elif args.opt_alts:
-#     run_ooa(args.path, args.config_path, env, args.video_path)
+    test_experiment(args.path, args.config_path, env, args.mode)
+elif args.opt_alts:
+    run_ooa(args.path, args.config_path, env)
 else:  
     run_experiment(args, CONFIG, env)
