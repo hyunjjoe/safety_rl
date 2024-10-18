@@ -8,8 +8,6 @@ import gym
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-import torch
-from omegaconf import OmegaConf
 from RARL.utils import save_obj
 from RARL.DDQNPolicy import DDQNPolicy
 from RARL.config import dqnConfig
@@ -327,16 +325,6 @@ def run_ooa(path, config_path, env, video_path, doneType='toEnd'):
   )
   agent.restore(path)
   env.ooa(q_func=agent.Q_network, video_path=video_path)
-#   alignment_data = env.ooa_test(q_func=agent.Q_network)
-#   directory = "alignment_data"
-#   filename = "lift.npy"
-
-#   # Create the directory if it doesn't exist
-#   if not os.path.exists(directory):
-#      os.makedirs(directory)
-
-#   # Save the numpy array to the specified file
-#   np.save(os.path.join(directory, filename), alignment_data)
 
 if args.test:
     test_experiment(args.path, args.config_path, env)
